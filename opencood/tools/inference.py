@@ -100,7 +100,12 @@ def main():
             vis_aabbs_gt.append(o3d.geometry.LineSet())
             vis_aabbs_pred.append(o3d.geometry.LineSet())
 
-    for i, batch_data in tqdm(enumerate(data_loader)):
+    progress_bar = tqdm(data_loader,
+                        total=len(data_loader),
+                        desc='Inference',
+                        unit='batch',
+                        dynamic_ncols=True)
+    for i, batch_data in enumerate(progress_bar):
         # print(i)
         with torch.no_grad():
             batch_data = train_utils.to_device(batch_data, device)

@@ -2,8 +2,8 @@
 name: visualization
 
 yaml_parser: "load_voxel_params"
-root_dir: "opv2v_data_dumping/train"
-validate_dir: "opv2v_data_dumping/test"
+root_dir: "/home/user/datasets/v2xset/train"
+validate_dir: "/home/user/datasets/v2xset/test"
 
 train_params:
   batch_size: &batch_size 4
@@ -12,7 +12,7 @@ train_params:
   save_freq: 1
 
 fusion:
-  core_method: 'EarlyFusionDataset' # LateFusionDataset, EarlyFusionDataset, IntermediateFusionDataset supported
+  core_method: 'IntermediateFusionDataset' # LateFusionDataset, EarlyFusionDataset, IntermediateFusionDataset supported
   args: []
 
 # preprocess-related

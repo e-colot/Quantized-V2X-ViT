@@ -32,8 +32,8 @@ class HGTCavAttention(nn.Module):
         self.relation_msg = nn.Parameter(
             torch.Tensor(num_relations, heads, dim_head, dim_head))
 
-        torch.nn.init.xavier_uniform(self.relation_att)
-        torch.nn.init.xavier_uniform(self.relation_msg)
+        torch.nn.init.xavier_uniform_(self.relation_att)
+        torch.nn.init.xavier_uniform_(self.relation_msg)
 
     def to_qkv(self, x, types):
         # x: (B,H,W,L,C)
