@@ -19,10 +19,6 @@ from opencood.utils import eval_utils
 from opencood.visualization import vis_utils
 import matplotlib.pyplot as plt
 
-# for quantization
-from torchao.quantization import Int8DynamicActivationInt8WeightConfig, quantize_
-from copy import deepcopy
-
 class Arguments:
     model_dir = 'opencood/v2x-vit'
     fusion_method = 'intermediate'
@@ -64,20 +60,8 @@ def main():
     print('Loading Model from checkpoint')
     saved_path = opt.model_dir
     _, model = train_utils.load_saved_model(saved_path, model)
+
     model.eval()
-
-# ---------- Model (full) quantization ----------------
-    model_save = deepcopy(model)
-    model_w8a8 = deepcopy(model)
-    quantize_(model_w8a8, Int8DynamicActivationInt8WeightConfig())
-
-    # save model for size checks
-    torch.save(model_w8a8.state_dict(), os.path.join(opt.model_dir, 'w8a8.pth'))
-
-
-    # work on quantized model
-    model = model_w8a8
-
     # Create the dictionary for evaluation.
     # also store the confidence score for each prediction
     result_stat = {0.3: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
