@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 class Arguments:
     model_dir = 'opencood/v2x-vit'
     fusion_method = 'intermediate'
+    quantization_yaml = 'quantized/q_config.yaml'
     show_vis = False
     show_sequence = False
     save_vis = False

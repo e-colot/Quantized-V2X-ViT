@@ -7,6 +7,7 @@ import re
 import yaml
 import os
 import math
+import opencood.tools.quantization_utils as quantization_utils
 
 import numpy as np
 
@@ -45,6 +46,9 @@ def load_yaml(file, opt=None):
     param = yaml.load(stream, Loader=loader)
     if "yaml_parser" in param:
         param = eval(param["yaml_parser"])(param)
+
+    if opt and opt.quantization_yaml:
+        quantization_utils.load_quantization_yaml(opt.quantization_yaml, param)
 
     return param
 
