@@ -1,0 +1,5 @@
+- Quantization theoretical reading
+- Model comprehension
+- Toolchain exploration
+- ONNX export
+- TorchRT export
