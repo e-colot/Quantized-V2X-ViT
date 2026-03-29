@@ -128,10 +128,15 @@ class AffineFakeQuantizer(nn.Module):
         self.mantissa_bits = 0
         self.exponent_bits = 0
 
-        match params['type']:
+        match params['type'].lower():
             case 'fp16':
                 self.mantissa_bits = 10
                 self.exponent_bits = 5
+            case 'bp16':
+                # the conversion fp32 -> bp16 could be highly optimized (no exponent change)
+                # might be usefull to implement at some point
+                self.mantissa_bits = 7
+                self.exponent_bits = 8
             case _:
                 raise ValueError("Unsupported quantization type: {}".format(params['type']))
 
