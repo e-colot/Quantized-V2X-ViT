@@ -137,6 +137,10 @@ class AffineFakeQuantizer(nn.Module):
                 # might be usefull to implement at some point
                 self.mantissa_bits = 7
                 self.exponent_bits = 8
+            case 'fp8':
+                # according to https://arxiv.org/abs/2209.05433, only E5M2 implemented as E4M3 doesn't handle inf which differs from fp16 or bf16 conversion
+                self.mantissa_bits = 2
+                self.exponent_bits = 5
             case _:
                 raise ValueError("Unsupported quantization type: {}".format(params['type']))
 
