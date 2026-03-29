@@ -1,2 +1,5 @@
+input_data:
+  d_type: fp16
+
 base_bev_backbone:
   test_field: 42
