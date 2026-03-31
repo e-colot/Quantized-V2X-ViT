@@ -111,6 +111,8 @@ class PillarVFE(nn.Module):
             )
         self.pfn_layers = nn.ModuleList(pfn_layers)
 
+        self.quant = AffineFakeQuantizer(self.quantize['features']['type'])
+
         self.voxel_x = voxel_size[0]
         self.voxel_y = voxel_size[1]
         self.voxel_z = voxel_size[2]
@@ -172,5 +174,8 @@ class PillarVFE(nn.Module):
         for pfn in self.pfn_layers:
             features = pfn(features)
         features = features.squeeze()
+
+        features = self.quant(features)
+
         batch_dict['pillar_features'] = features
         return batch_dict

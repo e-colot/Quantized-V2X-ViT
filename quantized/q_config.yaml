@@ -4,3 +4,7 @@ pillar_vfe:
       type: fp32
       quantize_relu: False
       relu_type: fp32
+    features:
+      type: fp32
+
+      
