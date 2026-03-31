@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 
 import opencood.hypes_yaml.yaml_utils as yaml_utils
 from opencood.tools import train_utils, inference_utils
+from opencood.tools import quantization_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils
 from opencood.visualization import vis_utils
@@ -23,6 +24,7 @@ class Arguments:
     model_dir = 'opencood/v2x-vit'
     fusion_method = 'intermediate'
     quantization_yaml = 'quantized/q_config.yaml'
+    checkpoint_compat_yaml = 'quantized/checkpoint_compat.yaml'
     show_vis = False
     show_sequence = False
     save_vis = False
@@ -60,7 +62,12 @@ def main():
 
     print('Loading Model from checkpoint')
     saved_path = opt.model_dir
-    _, model = train_utils.load_saved_model(saved_path, model)
+    _, model = quantization_utils.load_saved_model_with_compat(
+        saved_path,
+        model,
+        compat_yaml_path=opt.checkpoint_compat_yaml,
+        verbose=True,
+    )
 
     model.eval()
     # Create the dictionary for evaluation.

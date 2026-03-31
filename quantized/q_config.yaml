@@ -1,8 +1,4 @@
 pillar_vfe:
   quantize:
     PFN:
-      type_w: fp16
-      type_a: fp8
-      type_b: fp32
-    otherPFN:
-      type: fp16
+      type: fp8
