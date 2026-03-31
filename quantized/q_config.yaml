@@ -1,5 +1,8 @@
-input_data:
-  d_type: fp16
-
-base_bev_backbone:
-  test_field: 42
+pillar_vfe:
+  quantize:
+    PFN:
+      type_w: fp16
+      type_a: fp8
+      type_b: fp32
+    otherPFN:
+      type: fp16

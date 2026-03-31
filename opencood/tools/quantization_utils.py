@@ -1,6 +1,7 @@
 import opencood.hypes_yaml.yaml_utils as yaml_utils
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def load_quantization_yaml(path, hypes):
@@ -23,6 +24,48 @@ def load_quantization_yaml(path, hypes):
 
         else:
             model_args[k] = v
+
+
+def parse_qlinear_cfg(quantize_cfg=None, default_type='fp32', cfg_name='quantized linear'):
+    """
+    Parse quantization config for linear layers.
+
+    Supported config formats:
+      1) {'type': <dtype>} for shared activation/weight/bias quantization
+      2) {'type_a': <dtype>, 'type_w': <dtype>, 'type_b': <dtype>} for split configs
+    """
+    if quantize_cfg is None or len(quantize_cfg) == 0:
+        quantize_cfg = {'type': default_type}
+
+    if not isinstance(quantize_cfg, dict):
+        raise ValueError("{} config must be a dictionary.".format(cfg_name))
+
+    has_shared = 'type' in quantize_cfg
+    split_keys = {'type_a', 'type_w', 'type_b'}
+    has_split = len(split_keys & set(quantize_cfg.keys())) > 0
+
+    if has_shared and has_split:
+        raise ValueError(
+            "{} config is ambiguous: use either 'type' or all of 'type_a', 'type_w', 'type_b'.".format(cfg_name)
+        )
+
+    if has_shared:
+        shared_cfg = {'type': quantize_cfg['type']}
+        return shared_cfg, shared_cfg, shared_cfg
+
+    missing_keys = split_keys - set(quantize_cfg.keys())
+    if missing_keys:
+        raise ValueError(
+            "{} config must contain either 'type' or all of 'type_a', 'type_w', 'type_b'. Missing: {}".format(
+                cfg_name,
+                ', '.join(sorted(missing_keys))
+            )
+        )
+
+    a_cfg = {'type': quantize_cfg['type_a']}
+    w_cfg = {'type': quantize_cfg['type_w']}
+    b_cfg = {'type': quantize_cfg['type_b']}
+    return a_cfg, w_cfg, b_cfg
 
 
 class AffineFakeQuantizerAutograd(torch.autograd.Function):
@@ -156,7 +199,17 @@ class AffineFakeQuantizerAutograd(torch.autograd.Function):
     def backward(ctx, grad_output):
         # Straight-Through Estimator: pass the gradient through unchanged.
         return grad_output, None, None, None, None, None
+    
+class Passtrough(torch.autograd.Function):
 
+    @staticmethod
+    def forward(ctx, x):
+        return x
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Straight-Through Estimator: pass the gradient through unchanged.
+        return grad_output
+    
 
 class AffineFakeQuantizer(nn.Module):
     """
@@ -171,8 +224,11 @@ class AffineFakeQuantizer(nn.Module):
         self.exponent_bits = 0
         self.block_size = 0
         self.fn = True # does infinites belong to the representation
+        self.passthrough = False
 
         match params['type'].lower():
+            case 'fp32':
+                self.passthrough = True
             case 'fp16':
                 self.mantissa_bits = 10
                 self.exponent_bits = 5
@@ -184,7 +240,7 @@ class AffineFakeQuantizer(nn.Module):
                 self.exponent_bits = 8
                 self.fn = True
             case 'fp8':
-                # fp8_e5m3 by default
+                # fp8_e5m2 by default
                 self.mantissa_bits = 2
                 self.exponent_bits = 5
                 self.fn = True
@@ -205,10 +261,42 @@ class AffineFakeQuantizer(nn.Module):
                 raise ValueError("Unsupported quantization type: {}".format(params['type']))
         
     def forward(self, x):
-        return AffineFakeQuantizerAutograd.apply(
-            x,
-            self.mantissa_bits,
-            self.exponent_bits,
-            self.block_size,
-            self.fn
-        )
+        if self.passthrough:
+            return Passtrough.apply(x)
+        else:
+            return AffineFakeQuantizerAutograd.apply(
+                x,
+                self.mantissa_bits,
+                self.exponent_bits,
+                self.block_size,
+                self.fn
+            )
+
+
+class QuantizedLinear(nn.Module):
+    """
+    Fake-quantized linear layer that supports shared or split quantization config.
+    """
+
+    def __init__(self, in_features, out_features, bias=True, quantize_cfg=None, cfg_name='quantized linear'):
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features, bias=bias)
+
+        a_cfg, w_cfg, b_cfg = parse_qlinear_cfg(quantize_cfg=quantize_cfg, cfg_name=cfg_name)
+        self.quant_a = AffineFakeQuantizer(a_cfg)
+        self.quant_w = AffineFakeQuantizer(w_cfg)
+        self.quant_b = AffineFakeQuantizer(b_cfg)
+
+    @property
+    def weight(self):
+        return self.linear.weight
+
+    @property
+    def bias(self):
+        return self.linear.bias
+
+    def forward(self, x):
+        x_q = self.quant_a(x)
+        w_q = self.quant_w(self.linear.weight)
+        b_q = self.quant_b(self.linear.bias) if self.linear.bias is not None else None
+        return F.linear(x_q, w_q, b_q)
