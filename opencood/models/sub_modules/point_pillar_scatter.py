@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from opencood.tools.quantization_utils import AffineFakeQuantizer
 
 
 class PointPillarScatter(nn.Module):
@@ -9,6 +10,10 @@ class PointPillarScatter(nn.Module):
         self.model_cfg = model_cfg
         self.num_bev_features = self.model_cfg['num_features']
         self.nx, self.ny, self.nz = model_cfg['grid_size']
+        self.quantize_cfg = self.model_cfg['quantize']
+
+        self.featuresQuantizer = AffineFakeQuantizer(self.quantize_cfg['features']['type'])
+
         assert self.nz == 1
 
     def forward(self, batch_dict):
@@ -42,6 +47,9 @@ class PointPillarScatter(nn.Module):
         batch_spatial_features = \
             batch_spatial_features.view(batch_size, self.num_bev_features *
                                         self.nz, self.ny, self.nx)
+        
+        batch_spatial_features = self.featuresQuantizer(batch_spatial_features)
+
         batch_dict['spatial_features'] = batch_spatial_features
 
         return batch_dict

@@ -90,7 +90,7 @@ class PillarVFE(nn.Module):
         self.use_norm = self.model_cfg['use_norm']
         self.with_distance = self.model_cfg['with_distance']
 
-        self.quantize = self.model_cfg.get('quantize', {})
+        self.quantize_cfg = self.model_cfg.get('quantize', {})
 
         self.use_absolute_xyz = self.model_cfg['use_absolute_xyz']
         num_point_features += 6 if self.use_absolute_xyz else 3
@@ -106,12 +106,12 @@ class PillarVFE(nn.Module):
             in_filters = num_filters[i]
             out_filters = num_filters[i + 1]
             pfn_layers.append(
-                PFNLayer(in_filters, out_filters, quantize_cfg=self.quantize.get('PFN', {}), use_norm=self.use_norm,
+                PFNLayer(in_filters, out_filters, quantize_cfg=self.quantize_cfg.get('PFN', {}), use_norm=self.use_norm,
                          last_layer=(i >= len(num_filters) - 2))
             )
         self.pfn_layers = nn.ModuleList(pfn_layers)
 
-        self.quant = AffineFakeQuantizer(self.quantize['features']['type'])
+        self.featuresQuantizer = AffineFakeQuantizer(self.quantize_cfg['features']['type'])
 
         self.voxel_x = voxel_size[0]
         self.voxel_y = voxel_size[1]
@@ -175,7 +175,7 @@ class PillarVFE(nn.Module):
             features = pfn(features)
         features = features.squeeze()
 
-        features = self.quant(features)
+        features = self.featuresQuantizer(features)
 
         batch_dict['pillar_features'] = features
         return batch_dict
