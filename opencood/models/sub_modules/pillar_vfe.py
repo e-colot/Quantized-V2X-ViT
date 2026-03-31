@@ -5,7 +5,7 @@ Pillar VFE, credits to OpenPCDet.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from opencood.tools.quantization_utils import QuantizedLinear
+from opencood.tools.quantization_utils import QuantizedLinear, AffineFakeQuantizer
 
 
 class PFNLayer(nn.Module):
@@ -17,6 +17,9 @@ class PFNLayer(nn.Module):
                  last_layer=False
                  ):
         super().__init__()
+
+        if quantize_cfg is None or len(quantize_cfg) == 0:
+            quantize_cfg = {'type': 'fp32', 'quantize_relu': False}
 
         self.last_vfe = last_layer
         self.use_norm = use_norm
@@ -41,6 +44,11 @@ class PFNLayer(nn.Module):
                 cfg_name='PFN'
             )
 
+        self.quantize_relu = False
+        if quantize_cfg['quantize_relu']:
+            self.quantize_relu = True
+            self.reluQuantizer = AffineFakeQuantizer(quantize_cfg['relu_type'])
+
         self.part = 50000
 
     def forward(self, inputs):
@@ -57,7 +65,12 @@ class PFNLayer(nn.Module):
         x = self.norm(x.permute(0, 2, 1)).permute(0, 2,
                                                   1) if self.use_norm else x
         torch.backends.cudnn.enabled = True
+        
         x = F.relu(x)
+        if self.quantize_relu:
+            # after ReLU, data should have the same data type as the bias
+            x = self.reluQuantizer(x)
+        
         x_max = torch.max(x, dim=1, keepdim=True)[0]
 
         if self.last_vfe:

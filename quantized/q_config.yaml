@@ -1,4 +1,6 @@
 pillar_vfe:
   quantize:
     PFN:
-      type: fp8
+      type: fp32
+      quantize_relu: False
+      relu_type: fp32
