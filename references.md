@@ -7,4 +7,5 @@
 * to read
 
 ---
-
+# [3] T. Dettmers, M. Lewis, Y. Belkada, and L. Zettlemoyer, "LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale," arXiv preprint arXiv:2208.07339, Aug. 2022, doi: 10.48550/arXiv.2208.07339.
+* about transformers
