@@ -375,11 +375,10 @@ class Passtrough(torch.autograd.Function):
 class AffineFakeQuantizer(nn.Module):
     """
     Fake quantizer where output remains in fp32.
-    params is a dict containing:
-        'type' - currently supports 'fp16' and 'bp16'.
+    Accepts a type string directly (e.g., 'fp8', 'fp16', 'bp16').
     """
 
-    def __init__(self, params):
+    def __init__(self, dtype):
         super().__init__()
         self.mantissa_bits = 0
         self.exponent_bits = 0
@@ -387,7 +386,7 @@ class AffineFakeQuantizer(nn.Module):
         self.fn = True # does infinites belong to the representation
         self.passthrough = False
 
-        match params['type'].lower():
+        match dtype.lower():
             case 'fp32':
                 self.passthrough = True
             case 'fp16':
@@ -419,7 +418,7 @@ class AffineFakeQuantizer(nn.Module):
                 self.block_size = 16
                 self.fn = False
             case _:
-                raise ValueError("Unsupported quantization type: {}".format(params['type']))
+                raise ValueError("Unsupported quantization type: {}".format(dtype))
         
     def forward(self, x):
         if self.passthrough:
@@ -433,6 +432,7 @@ class AffineFakeQuantizer(nn.Module):
                 self.fn
             )
 
+## ============== QUANTIZED MODULES ==================
 
 class QuantizedLinear(nn.Module):
     """
@@ -444,9 +444,9 @@ class QuantizedLinear(nn.Module):
         self.linear = nn.Linear(in_features, out_features, bias=bias)
 
         a_cfg, w_cfg, b_cfg = parse_qlinear_cfg(quantize_cfg=quantize_cfg, cfg_name=cfg_name)
-        self.quant_a = AffineFakeQuantizer(a_cfg)
-        self.quant_w = AffineFakeQuantizer(w_cfg)
-        self.quant_b = AffineFakeQuantizer(b_cfg)
+        self.quant_a = AffineFakeQuantizer(a_cfg['type'])
+        self.quant_w = AffineFakeQuantizer(w_cfg['type'])
+        self.quant_b = AffineFakeQuantizer(b_cfg['type'])
 
     @property
     def weight(self):
