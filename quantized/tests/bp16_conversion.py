@@ -2,7 +2,7 @@ import torch
 from opencood.tools.quantization_utils import AffineFakeQuantizer
 import struct
 
-quantizer = AffineFakeQuantizer({'type' : 'bp16'})
+quantizer = AffineFakeQuantizer('bp16')
 
     # Special values (NaN, Inf, zero)
 special_values = torch.tensor([torch.nan, torch.inf, -torch.inf, 0.0, -0.0], dtype=torch.float32)

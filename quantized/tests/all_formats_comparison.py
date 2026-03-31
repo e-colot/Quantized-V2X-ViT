@@ -8,11 +8,11 @@ print("=" * 86)
 x_large = torch.randn(512, 512, dtype=torch.float32)
 
 quantizers = [
-    ("FP16", 10, 5, AffineFakeQuantizer({'type': 'fp16'})),
-    ("BP16", 7, 8, AffineFakeQuantizer({'type': 'bp16'})),
-    ("FP8 E5M2", 2, 5, AffineFakeQuantizer({'type': 'fp8_e5m2'})),
-    ("FP8 E4M3FN", 3, 4, AffineFakeQuantizer({'type': 'fp8_e4m3fn'})),
-    ("FP4", 1, 2, AffineFakeQuantizer({'type': 'fp4'})),
+    ("FP16", 10, 5, AffineFakeQuantizer('fp16')),
+    ("BP16", 7, 8, AffineFakeQuantizer('bp16')),
+    ("FP8 E5M2", 2, 5, AffineFakeQuantizer('fp8_e5m2')),
+    ("FP8 E4M3FN", 3, 4, AffineFakeQuantizer('fp8_e4m3fn')),
+    ("FP4", 1, 2, AffineFakeQuantizer('fp4')),
 ]
 
 print("\nFormat      | Mantissa Bits | Exponent Bits |      MSE")

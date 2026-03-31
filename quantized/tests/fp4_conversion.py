@@ -1,7 +1,7 @@
 import torch
 from opencood.tools.quantization_utils import AffineFakeQuantizer
 
-quantizer_fp4 = AffineFakeQuantizer({'type': 'fp4'})
+quantizer_fp4 = AffineFakeQuantizer('fp4')
 
     # Special values (NaN, Inf, zero)
 test_special = torch.ones(16, dtype=torch.float32)

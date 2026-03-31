@@ -1,0 +1,9 @@
+version: 0.1
+notes: Key remapping rules to load legacy checkpoints after quantization wrappers are introduced.
+rules:
+  - when_contains: .pfn_layers.
+    old_suffix: .linear.weight
+    new_suffix: .linear.linear.weight
+  - when_contains: .pfn_layers.
+    old_suffix: .linear.bias
+    new_suffix: .linear.linear.bias

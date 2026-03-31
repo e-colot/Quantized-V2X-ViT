@@ -5,26 +5,49 @@ Pillar VFE, credits to OpenPCDet.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from opencood.tools.quantization_utils import QuantizedLinear, AffineFakeQuantizer
 
 
 class PFNLayer(nn.Module):
     def __init__(self,
                  in_channels,
                  out_channels,
+                 quantize_cfg=None,
                  use_norm=True,
-                 last_layer=False):
+                 last_layer=False
+                 ):
         super().__init__()
+
+        if quantize_cfg is None or len(quantize_cfg) == 0:
+            quantize_cfg = {'type': 'fp32', 'quantize_relu': False}
 
         self.last_vfe = last_layer
         self.use_norm = use_norm
         if not self.last_vfe:
             out_channels = out_channels // 2
-
+        
         if self.use_norm:
-            self.linear = nn.Linear(in_channels, out_channels, bias=False)
+            self.linear = QuantizedLinear(
+                in_channels,
+                out_channels,
+                bias=False,
+                quantize_cfg=quantize_cfg,
+                cfg_name='PFN'
+            )
             self.norm = nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01)
         else:
-            self.linear = nn.Linear(in_channels, out_channels, bias=True)
+            self.linear = QuantizedLinear(
+                in_channels,
+                out_channels,
+                bias=True,
+                quantize_cfg=quantize_cfg,
+                cfg_name='PFN'
+            )
+
+        self.quantize_relu = False
+        if quantize_cfg['quantize_relu']:
+            self.quantize_relu = True
+            self.reluQuantizer = AffineFakeQuantizer(quantize_cfg['relu_type'])
 
         self.part = 50000
 
@@ -42,7 +65,12 @@ class PFNLayer(nn.Module):
         x = self.norm(x.permute(0, 2, 1)).permute(0, 2,
                                                   1) if self.use_norm else x
         torch.backends.cudnn.enabled = True
+        
         x = F.relu(x)
+        if self.quantize_relu:
+            # after ReLU, data should have the same data type as the bias
+            x = self.reluQuantizer(x)
+        
         x_max = torch.max(x, dim=1, keepdim=True)[0]
 
         if self.last_vfe:
@@ -62,6 +90,8 @@ class PillarVFE(nn.Module):
         self.use_norm = self.model_cfg['use_norm']
         self.with_distance = self.model_cfg['with_distance']
 
+        self.quantize = self.model_cfg.get('quantize', {})
+
         self.use_absolute_xyz = self.model_cfg['use_absolute_xyz']
         num_point_features += 6 if self.use_absolute_xyz else 3
         if self.with_distance:
@@ -76,7 +106,7 @@ class PillarVFE(nn.Module):
             in_filters = num_filters[i]
             out_filters = num_filters[i + 1]
             pfn_layers.append(
-                PFNLayer(in_filters, out_filters, self.use_norm,
+                PFNLayer(in_filters, out_filters, quantize_cfg=self.quantize.get('PFN', {}), use_norm=self.use_norm,
                          last_layer=(i >= len(num_filters) - 2))
             )
         self.pfn_layers = nn.ModuleList(pfn_layers)

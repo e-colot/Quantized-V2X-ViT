@@ -1,6 +1,11 @@
 import opencood.hypes_yaml.yaml_utils as yaml_utils
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import glob
+import os
+import re
+import yaml
 
 
 def load_quantization_yaml(path, hypes):
@@ -23,6 +28,205 @@ def load_quantization_yaml(path, hypes):
 
         else:
             model_args[k] = v
+
+
+def parse_qlinear_cfg(quantize_cfg=None, default_type='fp32', cfg_name='quantized linear'):
+    """
+    Parse quantization config for linear layers.
+
+    Supported config formats:
+      1) {'type': <dtype>} for shared activation/weight/bias quantization
+      2) {'type_a': <dtype>, 'type_w': <dtype>, 'type_b': <dtype>} for split configs
+    """
+    if quantize_cfg is None or len(quantize_cfg) == 0:
+        quantize_cfg = {'type': default_type}
+
+    if not isinstance(quantize_cfg, dict):
+        raise ValueError("{} config must be a dictionary.".format(cfg_name))
+
+    has_shared = 'type' in quantize_cfg
+    split_keys = {'type_a', 'type_w', 'type_b'}
+    has_split = len(split_keys & set(quantize_cfg.keys())) > 0
+
+    if has_shared and has_split:
+        raise ValueError(
+            "{} config is ambiguous: use either 'type' or all of 'type_a', 'type_w', 'type_b'.".format(cfg_name)
+        )
+
+    if has_shared:
+        shared_cfg = {'type': quantize_cfg['type']}
+        return shared_cfg, shared_cfg, shared_cfg
+
+    missing_keys = split_keys - set(quantize_cfg.keys())
+    if missing_keys:
+        raise ValueError(
+            "{} config must contain either 'type' or all of 'type_a', 'type_w', 'type_b'. Missing: {}".format(
+                cfg_name,
+                ', '.join(sorted(missing_keys))
+            )
+        )
+
+    a_cfg = {'type': quantize_cfg['type_a']}
+    w_cfg = {'type': quantize_cfg['type_w']}
+    b_cfg = {'type': quantize_cfg['type_b']}
+    return a_cfg, w_cfg, b_cfg
+
+
+def _find_last_checkpoint_epoch(saved_path):
+    if os.path.exists(os.path.join(saved_path, 'latest.pth')):
+        return 10000
+
+    file_list = glob.glob(os.path.join(saved_path, '*epoch*.pth'))
+    if not file_list:
+        return 0
+
+    epochs_exist = []
+    for file_path in file_list:
+        result = re.findall(r'.*epoch(.*)\.pth.*', file_path)
+        if result:
+            epochs_exist.append(int(result[0]))
+
+    return max(epochs_exist) if epochs_exist else 0
+
+
+def _normalize_loaded_checkpoint(checkpoint):
+    if isinstance(checkpoint, dict):
+        for candidate_key in ('state_dict', 'model_state_dict', 'model'):
+            if candidate_key in checkpoint and isinstance(checkpoint[candidate_key], dict):
+                checkpoint = checkpoint[candidate_key]
+                break
+
+    if not isinstance(checkpoint, dict):
+        raise ValueError('Loaded checkpoint is not a valid state_dict dictionary.')
+
+    normalized = {}
+    for key, value in checkpoint.items():
+        if key.startswith('module.'):
+            key = key[len('module.'):]
+        normalized[key] = value
+    return normalized
+
+
+def _load_checkpoint_compat_rules(compat_yaml_path):
+    if not compat_yaml_path:
+        return []
+    if not os.path.exists(compat_yaml_path):
+        raise FileNotFoundError('Compatibility YAML not found: {}'.format(compat_yaml_path))
+
+    with open(compat_yaml_path, 'r') as f:
+        config = yaml.safe_load(f) or {}
+
+    rules = config.get('rules', [])
+    if not isinstance(rules, list):
+        raise ValueError("'rules' in compatibility YAML must be a list.")
+    return rules
+
+
+def _rule_matches_key(key, rule):
+    when_prefix = rule.get('when_prefix')
+    when_contains = rule.get('when_contains')
+    old_suffix = rule.get('old_suffix')
+
+    if when_prefix and not key.startswith(when_prefix):
+        return False
+    if when_contains and when_contains not in key:
+        return False
+    if old_suffix and not key.endswith(old_suffix):
+        return False
+    return True
+
+
+def _apply_compat_rules_to_key(key, rules):
+    remapped_key = key
+    for rule in rules:
+        if not _rule_matches_key(remapped_key, rule):
+            continue
+
+        old_suffix = rule.get('old_suffix')
+        new_suffix = rule.get('new_suffix')
+        if old_suffix is None or new_suffix is None:
+            continue
+
+        remapped_key = remapped_key[:-len(old_suffix)] + new_suffix
+        break
+    return remapped_key
+
+
+def load_saved_model_with_compat(saved_path,
+                                 model,
+                                 compat_yaml_path=None,
+                                 verbose=True):
+    """
+    Load latest saved model checkpoint with optional key remapping rules.
+
+    The compatibility YAML can define remapping rules as:
+      rules:
+        - when_prefix: pfn_layers.
+          old_suffix: .linear.weight
+          new_suffix: .linear.linear.weight
+    """
+    assert os.path.exists(saved_path), '{} not found'.format(saved_path)
+
+    initial_epoch = _find_last_checkpoint_epoch(saved_path)
+    if initial_epoch <= 0:
+        return initial_epoch, model
+
+    model_file = os.path.join(saved_path, 'net_epoch%d.pth' % initial_epoch) \
+        if initial_epoch != 10000 else os.path.join(saved_path, 'latest.pth')
+
+    if verbose:
+        print('resuming by loading epoch %d' % initial_epoch)
+        print('checkpoint path: %s' % model_file)
+
+    raw_checkpoint = torch.load(model_file, map_location='cpu')
+    checkpoint_state = _normalize_loaded_checkpoint(raw_checkpoint)
+
+    rules = _load_checkpoint_compat_rules(compat_yaml_path)
+    remapped_state = {}
+    remapped_count = 0
+    for key, value in checkpoint_state.items():
+        new_key = _apply_compat_rules_to_key(key, rules)
+        if new_key != key:
+            remapped_count += 1
+        remapped_state[new_key] = value
+
+    model_state = model.state_dict()
+    filtered_state = {}
+    unexpected_keys = []
+    shape_mismatch_keys = []
+    for key, value in remapped_state.items():
+        if key not in model_state:
+            unexpected_keys.append(key)
+            continue
+        if model_state[key].shape != value.shape:
+            shape_mismatch_keys.append(key)
+            continue
+        filtered_state[key] = value
+
+    missing_keys = [key for key in model_state.keys() if key not in filtered_state]
+
+    model.load_state_dict(filtered_state, strict=False)
+
+    if verbose:
+        print('\n' + "="*50)
+        print('compat remapped keys: {}'.format(remapped_count))
+        print('loaded keys: {}'.format(len(filtered_state)))
+        print('missing model keys: {}'.format(len(missing_keys)))
+        print('unexpected checkpoint keys: {}'.format(len(unexpected_keys)))
+        print('shape mismatch keys: {}'.format(len(shape_mismatch_keys)))
+
+        # Keep output concise while still surfacing actionable key names.
+        max_print = 5
+        if missing_keys:
+            print('missing model key examples: {}'.format(', '.join(missing_keys[:max_print])))
+        if unexpected_keys:
+            print('unexpected checkpoint key examples: {}'.format(', '.join(unexpected_keys[:max_print])))
+        if shape_mismatch_keys:
+            print('shape mismatch key examples: {}'.format(', '.join(shape_mismatch_keys[:max_print])))
+        print("="*50 + "\n")
+
+    del raw_checkpoint
+    return initial_epoch, model
 
 
 class AffineFakeQuantizerAutograd(torch.autograd.Function):
@@ -156,23 +360,35 @@ class AffineFakeQuantizerAutograd(torch.autograd.Function):
     def backward(ctx, grad_output):
         # Straight-Through Estimator: pass the gradient through unchanged.
         return grad_output, None, None, None, None, None
+    
+class Passtrough(torch.autograd.Function):
 
+    @staticmethod
+    def forward(ctx, x):
+        return x
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Straight-Through Estimator: pass the gradient through unchanged.
+        return grad_output
+    
 
 class AffineFakeQuantizer(nn.Module):
     """
     Fake quantizer where output remains in fp32.
-    params is a dict containing:
-        'type' - currently supports 'fp16' and 'bp16'.
+    Accepts a type string directly (e.g., 'fp8', 'fp16', 'bp16').
     """
 
-    def __init__(self, params):
+    def __init__(self, dtype):
         super().__init__()
         self.mantissa_bits = 0
         self.exponent_bits = 0
         self.block_size = 0
         self.fn = True # does infinites belong to the representation
+        self.passthrough = False
 
-        match params['type'].lower():
+        match dtype.lower():
+            case 'fp32':
+                self.passthrough = True
             case 'fp16':
                 self.mantissa_bits = 10
                 self.exponent_bits = 5
@@ -184,7 +400,7 @@ class AffineFakeQuantizer(nn.Module):
                 self.exponent_bits = 8
                 self.fn = True
             case 'fp8':
-                # fp8_e5m3 by default
+                # fp8_e5m2 by default
                 self.mantissa_bits = 2
                 self.exponent_bits = 5
                 self.fn = True
@@ -202,13 +418,46 @@ class AffineFakeQuantizer(nn.Module):
                 self.block_size = 16
                 self.fn = False
             case _:
-                raise ValueError("Unsupported quantization type: {}".format(params['type']))
+                raise ValueError("Unsupported quantization type: {}".format(dtype))
         
     def forward(self, x):
-        return AffineFakeQuantizerAutograd.apply(
-            x,
-            self.mantissa_bits,
-            self.exponent_bits,
-            self.block_size,
-            self.fn
-        )
+        if self.passthrough:
+            return Passtrough.apply(x)
+        else:
+            return AffineFakeQuantizerAutograd.apply(
+                x,
+                self.mantissa_bits,
+                self.exponent_bits,
+                self.block_size,
+                self.fn
+            )
+
+## ============== QUANTIZED MODULES ==================
+
+class QuantizedLinear(nn.Module):
+    """
+    Fake-quantized linear layer that supports shared or split quantization config.
+    """
+
+    def __init__(self, in_features, out_features, bias=True, quantize_cfg=None, cfg_name='quantized linear'):
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features, bias=bias)
+
+        a_cfg, w_cfg, b_cfg = parse_qlinear_cfg(quantize_cfg=quantize_cfg, cfg_name=cfg_name)
+        self.quant_a = AffineFakeQuantizer(a_cfg['type'])
+        self.quant_w = AffineFakeQuantizer(w_cfg['type'])
+        self.quant_b = AffineFakeQuantizer(b_cfg['type'])
+
+    @property
+    def weight(self):
+        return self.linear.weight
+
+    @property
+    def bias(self):
+        return self.linear.bias
+
+    def forward(self, x):
+        x_q = self.quant_a(x)
+        w_q = self.quant_w(self.linear.weight)
+        b_q = self.quant_b(self.linear.bias) if self.linear.bias is not None else None
+        return F.linear(x_q, w_q, b_q)
