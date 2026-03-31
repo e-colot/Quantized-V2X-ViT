@@ -188,7 +188,7 @@ class AffineFakeQuantizer(nn.Module):
                 self.mantissa_bits = 2
                 self.exponent_bits = 5
                 self.fn = True
-            case 'fp8_e5m3':
+            case 'fp8_e5m2':
                 self.mantissa_bits = 2
                 self.exponent_bits = 5
                 self.fn = True
