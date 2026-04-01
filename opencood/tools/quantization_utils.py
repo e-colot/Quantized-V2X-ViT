@@ -30,46 +30,53 @@ def load_quantization_yaml(path, hypes):
             model_args[k] = v
 
 
-def parse_qlinear_cfg(quantize_cfg=None, default_type='fp32', cfg_name='quantized linear'):
+def _qparser_cfg(quantize_cfg=None,
+                 split_param_keys=None,
+                 default_type='fp32',
+                 cfg_name='quantized module'):
     """
-    Parse quantization config for linear layers.
+    Generic parser for quantized module configs.
 
     Supported config formats:
-      1) {'type': <dtype>} for shared activation/weight/bias quantization
-      2) {'type_a': <dtype>, 'type_w': <dtype>, 'type_b': <dtype>} for split configs
+      1) {'type': <dtype>} for shared quantization across all split params
+      2) {<split_key_1>: <dtype>, ...} for split quantization per param
     """
+    if split_param_keys is None or len(split_param_keys) == 0:
+        raise ValueError('split_param_keys must be a non-empty list/tuple of config keys.')
+
     if quantize_cfg is None or len(quantize_cfg) == 0:
         quantize_cfg = {'type': default_type}
 
     if not isinstance(quantize_cfg, dict):
         raise ValueError("{} config must be a dictionary.".format(cfg_name))
 
+    split_keys = tuple(split_param_keys)
     has_shared = 'type' in quantize_cfg
-    split_keys = {'type_a', 'type_w', 'type_b'}
-    has_split = len(split_keys & set(quantize_cfg.keys())) > 0
+    has_split = len(set(split_keys) & set(quantize_cfg.keys())) > 0
 
     if has_shared and has_split:
         raise ValueError(
-            "{} config is ambiguous: use either 'type' or all of 'type_a', 'type_w', 'type_b'.".format(cfg_name)
+            "{} config is ambiguous: use either 'type' or all of {}.".format(
+                cfg_name,
+                ', '.join("'{}'".format(k) for k in split_keys)
+            )
         )
 
     if has_shared:
         shared_cfg = {'type': quantize_cfg['type']}
-        return shared_cfg, shared_cfg, shared_cfg
+        return tuple(shared_cfg for _ in split_keys)
 
-    missing_keys = split_keys - set(quantize_cfg.keys())
+    missing_keys = set(split_keys) - set(quantize_cfg.keys())
     if missing_keys:
         raise ValueError(
-            "{} config must contain either 'type' or all of 'type_a', 'type_w', 'type_b'. Missing: {}".format(
+            "{} config must contain either 'type' or all of {}. Missing: {}".format(
                 cfg_name,
+                ', '.join("'{}'".format(k) for k in split_keys),
                 ', '.join(sorted(missing_keys))
             )
         )
 
-    a_cfg = {'type': quantize_cfg['type_a']}
-    w_cfg = {'type': quantize_cfg['type_w']}
-    b_cfg = {'type': quantize_cfg['type_b']}
-    return a_cfg, w_cfg, b_cfg
+    return tuple({'type': quantize_cfg[k]} for k in split_keys)
 
 
 def _find_last_checkpoint_epoch(saved_path):
@@ -371,7 +378,6 @@ class Passtrough(torch.autograd.Function):
         # Straight-Through Estimator: pass the gradient through unchanged.
         return grad_output
     
-
 class AffineFakeQuantizer(nn.Module):
     """
     Fake quantizer where output remains in fp32.
@@ -443,7 +449,11 @@ class QuantizedLinear(nn.Module):
         super().__init__()
         self.linear = nn.Linear(in_features, out_features, bias=bias)
 
-        a_cfg, w_cfg, b_cfg = parse_qlinear_cfg(quantize_cfg=quantize_cfg, cfg_name=cfg_name)
+        a_cfg, w_cfg, b_cfg = _qparser_cfg(
+            quantize_cfg=quantize_cfg,
+            split_param_keys=('type_a', 'type_w', 'type_b'),
+            cfg_name=cfg_name,
+        )
         self.quant_a = AffineFakeQuantizer(a_cfg['type'])
         self.quant_w = AffineFakeQuantizer(w_cfg['type'])
         self.quant_b = AffineFakeQuantizer(b_cfg['type'])
@@ -461,3 +471,130 @@ class QuantizedLinear(nn.Module):
         w_q = self.quant_w(self.linear.weight)
         b_q = self.quant_b(self.linear.bias) if self.linear.bias is not None else None
         return F.linear(x_q, w_q, b_q)
+
+class QuantizedConv2D(nn.Module):
+    """
+    Fake-quantized Conv2D layer with activation/kernel/bias quantization config.
+    """
+
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 groups=1,
+                 bias=True,
+                 padding_mode='zeros',
+                 device=None,
+                 dtype=None,
+                 quantize_cfg=None,
+                 cfg_name='quantized conv2d'):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+            padding_mode=padding_mode,
+            device=device,
+            dtype=dtype,
+        )
+
+        a_cfg, k_cfg, b_cfg = _qparser_cfg(
+            quantize_cfg=quantize_cfg,
+            split_param_keys=('type_a', 'type_k', 'type_b'),
+            cfg_name=cfg_name,
+        )
+        self.quant_a = AffineFakeQuantizer(a_cfg['type'])
+        self.quant_k = AffineFakeQuantizer(k_cfg['type'])
+        self.quant_b = AffineFakeQuantizer(b_cfg['type'])
+
+    @property
+    def weight(self):
+        return self.conv.weight
+
+    @property
+    def bias(self):
+        return self.conv.bias
+
+    def forward(self, x):
+        x_q = self.quant_a(x)
+        k_q = self.quant_k(self.conv.weight)
+        b_q = self.quant_b(self.conv.bias) if self.conv.bias is not None else None
+        return self.conv._conv_forward(x_q, k_q, b_q)
+
+
+class QuantizedConvTranspose2D(nn.Module):
+    """
+    Fake-quantized ConvTranspose2D layer with activation/kernel/bias quantization config.
+    """
+
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 output_padding=0,
+                 groups=1,
+                 bias=True,
+                 dilation=1,
+                 padding_mode='zeros',
+                 device=None,
+                 dtype=None,
+                 quantize_cfg=None,
+                 cfg_name='quantized convtranspose2d'):
+        super().__init__()
+        self.conv_t = nn.ConvTranspose2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            output_padding=output_padding,
+            groups=groups,
+            bias=bias,
+            dilation=dilation,
+            padding_mode=padding_mode,
+            device=device,
+            dtype=dtype,
+        )
+
+        a_cfg, k_cfg, b_cfg = _qparser_cfg(
+            quantize_cfg=quantize_cfg,
+            split_param_keys=('type_a', 'type_k', 'type_b'),
+            cfg_name=cfg_name,
+        )
+        self.quant_a = AffineFakeQuantizer(a_cfg['type'])
+        self.quant_k = AffineFakeQuantizer(k_cfg['type'])
+        self.quant_b = AffineFakeQuantizer(b_cfg['type'])
+
+    @property
+    def weight(self):
+        return self.conv_t.weight
+
+    @property
+    def bias(self):
+        return self.conv_t.bias
+
+    def forward(self, x):
+        x_q = self.quant_a(x)
+        k_q = self.quant_k(self.conv_t.weight)
+        b_q = self.quant_b(self.conv_t.bias) if self.conv_t.bias is not None else None
+        return F.conv_transpose2d(
+            x_q,
+            k_q,
+            b_q,
+            stride=self.conv_t.stride,
+            padding=self.conv_t.padding,
+            output_padding=self.conv_t.output_padding,
+            groups=self.conv_t.groups,
+            dilation=self.conv_t.dilation,
+        )
+
