@@ -4,7 +4,6 @@ pillar_vfe:
   quantize:
     PFN:
       type: fp8
-      quantize_relu: true
       relu_type: fp8
     features:
       type: fp8
@@ -15,64 +14,30 @@ point_pillar_scatter:
 base_bev_backbone:
   quantize:
     layers:
-      - conv:
-          type: fp8
-        batchnorm:
-          quantize_batchnorm: true
-          type: fp8
-        relu:
-          quantize_relu: true
-          type: fp8
-      - conv:
-          type: fp8
-        batchnorm:
-          quantize_batchnorm: true
-          type: fp8
-        relu:
-          quantize_relu: true
-          type: fp8
-      - conv:
-          type: fp8
-        batchnorm:
-          quantize_batchnorm: true
-          type: fp8
-        relu:
-          quantize_relu: true
-          type: fp8
+      - type: fp8
+        bn_type: fp8
+        relu_type: fp8
+      - type: fp8
+        bn_type: fp8
+        relu_type: fp8
+      - type: fp8
+        bn_type: fp8
+        relu_type: fp8
     upsample:
-      - convTranspose:
-          type: fp8
-        batchnorm:
-          quantize_batchnorm: true
-          type: fp8
-        relu:
-          quantize_relu: true
-          type: fp8
-      - convTranspose:
-          type: fp8
-        batchnorm:
-          quantize_batchnorm: true
-          type: fp8
-        relu:
-          quantize_relu: true
-          type: fp8
-      - convTranspose:
-          type: fp8
-        batchnorm:
-          quantize_batchnorm: true
-          type: fp8
-        relu:
-          quantize_relu: true
-          type: fp8
+      - type: fp8
+        bn_type: fp8
+        relu_type: fp8
+      - type: fp8
+        bn_type: fp8
+        relu_type: fp8
+      - type: fp8
+        bn_type: fp8
+        relu_type: fp8
 shrink_header:
   quantize:
-    - conv1:
+    - firstPass:
         type: fp8
-      relu1:
-        quantize_relu: true
+        relu_type: fp8
+      secondPass:
         type: fp8
-      conv2:
-        type: fp8
-      relu2:
-        quantize_relu: true
-        type: fp8
+        relu_type: fp8

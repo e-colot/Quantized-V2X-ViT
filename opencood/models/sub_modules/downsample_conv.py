@@ -16,23 +16,16 @@ class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size,
                  stride, padding, quantize_cfg):
         super().__init__()
-
-        relu1_d_type = 'fp32'
-        if quantize_cfg['relu1']['quantize_relu']:
-            relu1_d_type = quantize_cfg['relu1']['type']
-        relu2_d_type = 'fp32'
-        if quantize_cfg['relu2']['quantize_relu']:
-            relu2_d_type = quantize_cfg['relu2']['type']
         
         self.double_conv = nn.Sequential(
             QuantizedConv2D(in_channels, out_channels, kernel_size=kernel_size,
-                      stride=stride, padding=padding, quantize_cfg=quantize_cfg['conv1']),
+                      stride=stride, padding=padding, quantize_cfg=quantize_cfg['firstPass']),
             nn.ReLU(inplace=True),
-            AffineFakeQuantizer(relu1_d_type),
+            AffineFakeQuantizer(quantize_cfg['firstPass']['relu_type']),
             QuantizedConv2D(out_channels, out_channels, kernel_size=3, padding=1, 
-                            quantize_cfg=quantize_cfg['conv2']),
+                            quantize_cfg=quantize_cfg['secondPass']),
             nn.ReLU(inplace=True),
-            AffineFakeQuantizer(relu2_d_type)
+            AffineFakeQuantizer(quantize_cfg['secondPass']['relu_type'])
         )
 
     def forward(self, x):

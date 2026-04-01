@@ -4,7 +4,6 @@ pillar_vfe:
   quantize:
     PFN:
       type: fp32
-      quantize_relu: false
       relu_type: fp32
     features:
       type: fp32
@@ -15,65 +14,32 @@ point_pillar_scatter:
 base_bev_backbone:
   quantize:
     layers:
-      - conv:
-          type: fp32
-        batchnorm:
-          quantize_batchnorm: false
-          type: fp32
-        relu:
-          quantize_relu: false
-          type: fp32
-      - conv:
-          type: fp32
-        batchnorm:
-          quantize_batchnorm: false
-          type: fp32
-        relu:
-          quantize_relu: false
-          type: fp32
-      - conv:
-          type: fp32
-        batchnorm:
-          quantize_batchnorm: false
-          type: fp32
-        relu:
-          quantize_relu: false
-          type: fp32
+      - type: fp32
+        bn_type: fp32
+        relu_type: fp32
+      - type: fp32
+        bn_type: fp32
+        relu_type: fp32
+      - type: fp32
+        bn_type: fp32
+        relu_type: fp32
     upsample:
-      - convTranspose:
-          type: fp32
-        batchnorm:
-          quantize_batchnorm: false
-          type: fp32
-        relu:
-          quantize_relu: false
-          type: fp32
-      - convTranspose:
-          type: fp32
-        batchnorm:
-          quantize_batchnorm: false
-          type: fp32
-        relu:
-          quantize_relu: false
-          type: fp32
-      - convTranspose:
-          type: fp32
-        batchnorm:
-          quantize_batchnorm: false
-          type: fp32
-        relu:
-          quantize_relu: false
-          type: fp32
+      - type: fp32
+        bn_type: fp32
+        relu_type: fp32
+      - type: fp32
+        bn_type: fp32
+        relu_type: fp32
+      - type: fp32
+        bn_type: fp32
+        relu_type: fp32
 shrink_header:
   quantize:
-    - conv1:
+    - firstPass:
         type: fp32
-      relu1:
-        quantize_relu: false
+        relu_type: fp32
+      secondPass:
         type: fp32
-      conv2:
-        type: fp32
-      relu2:
-        quantize_relu: false
-        type: fp32
-        
+        relu_type: fp32
+# compression:
+#   quantize: 0

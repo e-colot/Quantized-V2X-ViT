@@ -46,33 +46,26 @@ class BaseBEVBackbone(nn.Module):
             layer_quantize_cfg = self.quantize_cfg['layers'][idx]
             upsample_quantize_cfg = self.quantize_cfg['upsample'][idx]
 
-            batchnorm_d_type = 'fp32'
-            relu_d_type = 'fp32'
-            if layer_quantize_cfg['batchnorm']['quantize_batchnorm']:
-                batchnorm_d_type = layer_quantize_cfg['batchnorm']['type']
-            if layer_quantize_cfg['relu']['quantize_relu']:
-                relu_d_type = layer_quantize_cfg['relu']['type']
-
             cur_layers = [
                 nn.ZeroPad2d(1),
                 QuantizedConv2D(
                     c_in_list[idx], num_filters[idx], kernel_size=3,
-                    stride=layer_strides[idx], padding=0, bias=False, quantize_cfg=layer_quantize_cfg['conv']
+                    stride=layer_strides[idx], padding=0, bias=False, quantize_cfg=layer_quantize_cfg
                 ),
                 nn.BatchNorm2d(num_filters[idx], eps=1e-3, momentum=0.01),
-                AffineFakeQuantizer(batchnorm_d_type),
+                AffineFakeQuantizer(layer_quantize_cfg['bn_type']),
                 nn.ReLU(),
-                AffineFakeQuantizer(relu_d_type)
+                AffineFakeQuantizer(layer_quantize_cfg['relu_type'])
             ]
 
             for _ in range(layer_nums[idx]):
                 cur_layers.extend([
                     QuantizedConv2D(num_filters[idx], num_filters[idx],
-                              kernel_size=3, padding=1, bias=False, quantize_cfg=layer_quantize_cfg['conv']),
+                              kernel_size=3, padding=1, bias=False, quantize_cfg=layer_quantize_cfg),
                     nn.BatchNorm2d(num_filters[idx], eps=1e-3, momentum=0.01),
-                    AffineFakeQuantizer(batchnorm_d_type),
+                    AffineFakeQuantizer(layer_quantize_cfg['bn_type']),
                     nn.ReLU(),
-                    AffineFakeQuantizer(relu_d_type)
+                    AffineFakeQuantizer(layer_quantize_cfg['relu_type'])
                 ])
 
             self.blocks.append(nn.Sequential(*cur_layers))
@@ -85,13 +78,12 @@ class BaseBEVBackbone(nn.Module):
                         QuantizedConvTranspose2D(
                             num_filters[idx], num_upsample_filters[idx],
                             upsample_strides[idx],
-                            stride=upsample_strides[idx], bias=False, quantize_cfg=upsample_quantize_cfg['convTranspose']
-                        ),
+                            stride=upsample_strides[idx], bias=False, quantize_cfg=upsample_quantize_cfg),
                         nn.BatchNorm2d(num_upsample_filters[idx],
                                        eps=1e-3, momentum=0.01),
-                        AffineFakeQuantizer(batchnorm_d_type),
+                        AffineFakeQuantizer(upsample_quantize_cfg['bn_type']),
                         nn.ReLU(),
-                        AffineFakeQuantizer(relu_d_type)
+                        AffineFakeQuantizer(upsample_quantize_cfg['relu_type'])
                     ))
                 else:
                     stride = np.round(1 / stride).astype(np.int)
@@ -99,33 +91,25 @@ class BaseBEVBackbone(nn.Module):
                         QuantizedConv2D(
                             num_filters[idx], num_upsample_filters[idx],
                             stride,
-                            stride=stride, bias=False, quantize_cfg=upsample_quantize_cfg['convTranspose']
-                        ),
+                            stride=stride, bias=False, quantize_cfg=upsample_quantize_cfg),
                         nn.BatchNorm2d(num_upsample_filters[idx], eps=1e-3,
                                        momentum=0.01),
-                        AffineFakeQuantizer(batchnorm_d_type),
+                        AffineFakeQuantizer(upsample_quantize_cfg['bn_type']),
                         nn.ReLU(),
-                        AffineFakeQuantizer(relu_d_type)
+                        AffineFakeQuantizer(upsample_quantize_cfg['relu_type'])
                     ))
 
         c_in = sum(num_upsample_filters)
         if len(upsample_strides) > num_levels:
             upsample_quantize_cfg = self.quantize_cfg['upsample'][-1]
 
-            batchnorm_d_type = 'fp32'
-            relu_d_type = 'fp32'
-            if upsample_quantize_cfg['batchnorm']['quantize_batchnorm']:
-                batchnorm_d_type = upsample_quantize_cfg['batchnorm']['type']
-            if upsample_quantize_cfg['relu']['quantize_relu']:
-                relu_d_type = upsample_quantize_cfg['relu']['type']
-
             self.deblocks.append(nn.Sequential(
                 QuantizedConvTranspose2D(c_in, c_in, upsample_strides[-1],
-                                   stride=upsample_strides[-1], bias=False, quantize_cfg=upsample_quantize_cfg['convTranspose']),
+                                   stride=upsample_strides[-1], bias=False, quantize_cfg=upsample_quantize_cfg),
                 nn.BatchNorm2d(c_in, eps=1e-3, momentum=0.01),
-                AffineFakeQuantizer(batchnorm_d_type),
+                AffineFakeQuantizer(upsample_quantize_cfg['bn_type']),
                 nn.ReLU(),
-                AffineFakeQuantizer(relu_d_type)
+                AffineFakeQuantizer(upsample_quantize_cfg['relu_type'])
             ))
 
         self.num_bev_features = c_in

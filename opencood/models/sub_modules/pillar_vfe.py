@@ -44,10 +44,7 @@ class PFNLayer(nn.Module):
                 cfg_name='PFN'
             )
 
-        self.quantize_relu = False
-        if quantize_cfg['quantize_relu']:
-            self.quantize_relu = True
-            self.reluQuantizer = AffineFakeQuantizer(quantize_cfg['relu_type'])
+        self.reluQuantizer = AffineFakeQuantizer(quantize_cfg['relu_type'])
 
         self.part = 50000
 
@@ -67,9 +64,7 @@ class PFNLayer(nn.Module):
         torch.backends.cudnn.enabled = True
         
         x = F.relu(x)
-        if self.quantize_relu:
-            # after ReLU, data should have the same data type as the bias
-            x = self.reluQuantizer(x)
+        x = self.reluQuantizer(x)
         
         x_max = torch.max(x, dim=1, keepdim=True)[0]
 
