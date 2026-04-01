@@ -41,5 +41,18 @@ shrink_header:
       secondPass:
         type: fp32
         relu_type: fp32
-# compression:
-#   quantize: 0
+compression:
+  quantize: 
+    encoder:
+      type: fp32
+      bn_type: fp32
+      relu_type: fp32
+    decoder:
+      firstPass:
+        type: fp32
+        bn_type: fp32
+        relu_type: fp32
+      secondPass:
+        type: fp32
+        bn_type: fp32
+        relu_type: fp32

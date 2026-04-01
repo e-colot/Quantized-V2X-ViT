@@ -41,3 +41,19 @@ shrink_header:
       secondPass:
         type: fp8
         relu_type: fp8
+compression:
+  quantize: 
+    encoder:
+      type: fp8
+      bn_type: fp8
+      relu_type: fp8
+    decoder:
+      firstPass:
+        type: fp8
+        bn_type: fp8
+        relu_type: fp8
+      secondPass:
+        type: fp8
+        bn_type: fp8
+        relu_type: fp8
+        

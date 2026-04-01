@@ -56,7 +56,8 @@ model:
       - 1
       - 2
       - 4
-    compression: 32
+    compression: 
+      compression_ratio: 32
     lidar_range: &id002
     - -140.8
     - -38.4

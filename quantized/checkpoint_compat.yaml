@@ -1,4 +1,4 @@
-version: 0.3
+version: 0.4
 notes: Key remapping rules to load legacy checkpoints after quantization wrappers are introduced.
 rules:
 # PillarVFE
@@ -203,3 +203,38 @@ rules:
   - when_prefix: shrink_conv.
     old_suffix: .double_conv.2.bias
     new_suffix: .double_conv.3.conv.bias
+
+# NaiveCompressor (compression)
+  - when_prefix: naive_compressor.
+    old_suffix: .encoder.0.weight
+    new_suffix: .encoder.0.conv.weight
+  - when_prefix: naive_compressor.
+    old_suffix: .encoder.0.bias
+    new_suffix: .encoder.0.conv.bias
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.0.weight
+    new_suffix: .decoder.0.conv.weight
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.0.bias
+    new_suffix: .decoder.0.conv.bias
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.3.weight
+    new_suffix: .decoder.5.conv.weight
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.3.bias
+    new_suffix: .decoder.5.conv.bias
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.4.weight
+    new_suffix: .decoder.6.weight
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.4.bias
+    new_suffix: .decoder.6.bias
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.4.running_mean
+    new_suffix: .decoder.6.running_mean
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.4.running_var
+    new_suffix: .decoder.6.running_var
+  - when_prefix: naive_compressor.
+    old_suffix: .decoder.4.num_batches_tracked
+    new_suffix: .decoder.6.num_batches_tracked

@@ -29,7 +29,7 @@ class PointPillarTransformer(nn.Module):
             self.shrink_conv = DownsampleConv(args['shrink_header'])
         self.compression = False
 
-        if args['compression'] > 0:
+        if args['compression']['compression_ratio'] > 0:
             self.compression = True
             self.naive_compressor = NaiveCompressor(256, args['compression'])
 
