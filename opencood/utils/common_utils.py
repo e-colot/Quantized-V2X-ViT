@@ -9,6 +9,7 @@ Common utilities
 
 import numpy as np
 import torch
+import warnings
 from shapely.geometry import Polygon
 
 
@@ -138,10 +139,45 @@ def compute_iou(box, boxes):
         Array of iou between box and boxes.
 
     """
-    # Calculate intersection areas
-    if np.any(np.array([box.union(b).area for b in boxes])==0):
-        print('debug')
-    iou = [box.intersection(b).area / box.union(b).area for b in boxes]
+    # Repair invalid geometry once and gracefully handle degenerate polygons.
+    if box is None or box.is_empty:
+        return np.zeros(len(boxes), dtype=np.float32)
+    if not box.is_valid:
+        box = box.buffer(0)
+        if box.is_empty:
+            return np.zeros(len(boxes), dtype=np.float32)
+
+    iou = []
+    for b in boxes:
+        if b is None or b.is_empty:
+            iou.append(0.0)
+            continue
+
+        if not b.is_valid:
+            b = b.buffer(0)
+            if b.is_empty:
+                iou.append(0.0)
+                continue
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="invalid value encountered in intersection",
+                category=RuntimeWarning,
+            )
+            union_area = box.union(b).area
+        if union_area <= 0:
+            iou.append(0.0)
+            continue
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="invalid value encountered in intersection",
+                category=RuntimeWarning,
+            )
+            inter_area = box.intersection(b).area
+        iou.append(inter_area / union_area)
 
     return np.array(iou, dtype=np.float32)
 
@@ -159,8 +195,12 @@ def convert_format(boxes_array):
         list of converted shapely.geometry.Polygon object.
 
     """
-    polygons = [Polygon([(box[i, 0], box[i, 1]) for i in range(4)]) for box in
-                boxes_array]
+    polygons = []
+    for box in boxes_array:
+        polygon = Polygon([(box[i, 0], box[i, 1]) for i in range(4)])
+        if not polygon.is_valid:
+            polygon = polygon.buffer(0)
+        polygons.append(polygon)
     return np.array(polygons)
 
 
