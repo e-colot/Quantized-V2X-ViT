@@ -29,6 +29,25 @@ class PointPillarTransformer(nn.Module):
             self.shrink_conv = DownsampleConv(args['shrink_header'])
         self.compression = False
 
+        # Check if compression is using the old integer format
+        if isinstance(args['compression'], int):
+            message = (
+                "\nDue to quantization, the config file structure had to be changed:"
+                "------------ previously ------------"
+                "[...]"
+                "compression: 32"
+                "[...]"
+                "--------------- now ---------------"
+                "[...]"
+                "compression:"
+                "compression_ratio: 32"
+                "[...]"
+            )
+            print(message)
+            
+            # Maintain compatibility
+            args['compression'] = {'compression_ratio': args['compression']}
+
         if args['compression']['compression_ratio'] > 0:
             self.compression = True
             self.naive_compressor = NaiveCompressor(256, args['compression'])
