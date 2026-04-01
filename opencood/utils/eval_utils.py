@@ -167,14 +167,45 @@ def eval_final_results(result_stat, save_path, global_sort_detections):
                       'mpre_70': mpre_70,
                       'mrec_70': mrec_70,
                       })
+
+    baseline_comparison = {
+        'ap30': 'N/A',
+        'ap_50': 'N/A',
+        'ap_70': 'N/A'
+    }
+
+    baseline_path = os.path.join(save_path, 'baseline_eval.yaml')
+    if os.path.exists(baseline_path):
+        try:
+            baseline_eval = yaml_utils.load_yaml(baseline_path)
+
+            baseline_values = {
+                'ap30': baseline_eval.get('ap30'),
+                'ap_50': baseline_eval.get('ap_50'),
+                'ap_70': baseline_eval.get('ap_70')
+            }
+            current_values = {
+                'ap30': ap_30,
+                'ap_50': ap_50,
+                'ap_70': ap_70
+            }
+
+            for key, baseline_value in baseline_values.items():
+                if baseline_value is None or baseline_value == 0:
+                    continue
+                delta_pct = ((current_values[key] - baseline_value) /
+                             baseline_value) * 100
+                baseline_comparison[key] = f"{delta_pct:+.2f}%"
+        except Exception:
+            pass
     
     output_file = 'eval.yaml' if not global_sort_detections else 'eval_global_sort.yaml'
     yaml_utils.save_yaml(dump_dict, os.path.join(save_path, output_file))
 
     print(f"\n{'='*15} RESULTS {'='*15}")
-    print(f"{'Metric':<25} | {'Value':<10}")
-    print("-" * 40)
-    print(f"{'Avg Precision @ IOU 0.3':<25} | {ap_30:<10.4f}")
-    print(f"{'Avg Precision @ IOU 0.5':<25} | {ap_50:<10.4f}")
-    print(f"{'Avg Precision @ IOU 0.7':<25} | {ap_70:<10.4f}")
-    print("-" * 40)
+    print(f"{'Metric':<25} | {'Value':<10} | {'baseline comparison':<20}")
+    print("-" * 63)
+    print(f"{'Avg Precision @ IOU 0.3':<25} | {ap_30:<10.4f} | {baseline_comparison['ap30']:<20}")
+    print(f"{'Avg Precision @ IOU 0.5':<25} | {ap_50:<10.4f} | {baseline_comparison['ap_50']:<20}")
+    print(f"{'Avg Precision @ IOU 0.7':<25} | {ap_70:<10.4f} | {baseline_comparison['ap_70']:<20}")
+    print("-" * 63)
