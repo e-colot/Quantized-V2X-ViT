@@ -17,6 +17,8 @@ def load_quantization_yaml(path, hypes):
 
     model_args = hypes['model']['args']
     for k, v in q_hypes.items():
+        if k =='name':
+            continue
         if k in model_args.keys():
             # already existing key
             if model_args[k].keys() & v.keys():
@@ -28,6 +30,10 @@ def load_quantization_yaml(path, hypes):
 
         else:
             model_args[k] = v
+
+    quantization_name = q_hypes.get('name', None)
+    if quantization_name is not None:
+        print("Quantization profile loaded: " + quantization_name)
 
 
 def _qparser_cfg(quantize_cfg=None,
