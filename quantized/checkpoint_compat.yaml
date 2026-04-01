@@ -17,52 +17,172 @@ rules:
     new_suffix: .1.conv.bias
   - when_contains: .blocks.
     old_suffix: .4.weight
-    new_suffix: .4.conv.weight
+    new_suffix: .6.conv.weight
   - when_contains: .blocks.
     old_suffix: .4.bias
-    new_suffix: .4.conv.bias
+    new_suffix: .6.conv.bias
+  - when_contains: .blocks.
+    old_suffix: .5.weight
+    new_suffix: .7.weight
+  - when_contains: .blocks.
+    old_suffix: .5.bias
+    new_suffix: .7.bias
+  - when_contains: .blocks.
+    old_suffix: .5.running_mean
+    new_suffix: .7.running_mean
+  - when_contains: .blocks.
+    old_suffix: .5.running_var
+    new_suffix: .7.running_var
+  - when_contains: .blocks.
+    old_suffix: .5.num_batches_tracked
+    new_suffix: .7.num_batches_tracked
   - when_contains: .blocks.
     old_suffix: .7.weight
-    new_suffix: .7.conv.weight
+    new_suffix: .11.conv.weight
   - when_contains: .blocks.
     old_suffix: .7.bias
-    new_suffix: .7.conv.bias
+    new_suffix: .11.conv.bias
   - when_contains: .blocks.
     old_suffix: .10.weight
-    new_suffix: .10.conv.weight
-  - when_contains: .blocks.
-    old_suffix: .10.bias
-    new_suffix: .10.conv.bias
-  - when_contains: .blocks.
-    old_suffix: .13.weight
-    new_suffix: .13.conv.weight
-  - when_contains: .blocks.
-    old_suffix: .13.bias
-    new_suffix: .13.conv.bias
-  - when_contains: .blocks.
-    old_suffix: .16.weight
     new_suffix: .16.conv.weight
   - when_contains: .blocks.
-    old_suffix: .16.bias
+    old_suffix: .10.bias
     new_suffix: .16.conv.bias
   - when_contains: .blocks.
+    old_suffix: .8.weight
+    new_suffix: .12.weight
+  - when_contains: .blocks.
+    old_suffix: .8.bias
+    new_suffix: .12.bias
+  - when_contains: .blocks.
+    old_suffix: .8.running_mean
+    new_suffix: .12.running_mean
+  - when_contains: .blocks.
+    old_suffix: .8.running_var
+    new_suffix: .12.running_var
+  - when_contains: .blocks.
+    old_suffix: .8.num_batches_tracked
+    new_suffix: .12.num_batches_tracked
+  - when_contains: .blocks.
+    old_suffix: .13.weight
+    new_suffix: .21.conv.weight
+  - when_contains: .blocks.
+    old_suffix: .13.bias
+    new_suffix: .21.conv.bias
+  - when_contains: .blocks.
+    old_suffix: .16.weight
+    new_suffix: .26.conv.weight
+  - when_contains: .blocks.
+    old_suffix: .16.bias
+    new_suffix: .26.conv.bias
+  - when_contains: .blocks.
+    old_suffix: .11.weight
+    new_suffix: .17.weight
+  - when_contains: .blocks.
+    old_suffix: .11.bias
+    new_suffix: .17.bias
+  - when_contains: .blocks.
+    old_suffix: .11.running_mean
+    new_suffix: .17.running_mean
+  - when_contains: .blocks.
+    old_suffix: .11.running_var
+    new_suffix: .17.running_var
+  - when_contains: .blocks.
+    old_suffix: .11.num_batches_tracked
+    new_suffix: .17.num_batches_tracked
+  - when_contains: .blocks.
     old_suffix: .19.weight
-    new_suffix: .19.conv.weight
+    new_suffix: .31.conv.weight
   - when_contains: .blocks.
     old_suffix: .19.bias
-    new_suffix: .19.conv.bias
+    new_suffix: .31.conv.bias
   - when_contains: .blocks.
     old_suffix: .22.weight
-    new_suffix: .22.conv.weight
+    new_suffix: .36.conv.weight
   - when_contains: .blocks.
     old_suffix: .22.bias
-    new_suffix: .22.conv.bias
+    new_suffix: .36.conv.bias
+  - when_contains: .blocks.
+    old_suffix: .14.weight
+    new_suffix: .22.weight
+  - when_contains: .blocks.
+    old_suffix: .14.bias
+    new_suffix: .22.bias
+  - when_contains: .blocks.
+    old_suffix: .14.running_mean
+    new_suffix: .22.running_mean
+  - when_contains: .blocks.
+    old_suffix: .14.running_var
+    new_suffix: .22.running_var
+  - when_contains: .blocks.
+    old_suffix: .14.num_batches_tracked
+    new_suffix: .22.num_batches_tracked
   - when_contains: .blocks.
     old_suffix: .25.weight
-    new_suffix: .25.conv.weight
+    new_suffix: .41.conv.weight
   - when_contains: .blocks.
     old_suffix: .25.bias
-    new_suffix: .25.conv.bias
+    new_suffix: .41.conv.bias
+  - when_contains: .blocks.
+    old_suffix: .17.weight
+    new_suffix: .27.weight
+  - when_contains: .blocks.
+    old_suffix: .17.bias
+    new_suffix: .27.bias
+  - when_contains: .blocks.
+    old_suffix: .17.running_mean
+    new_suffix: .27.running_mean
+  - when_contains: .blocks.
+    old_suffix: .17.running_var
+    new_suffix: .27.running_var
+  - when_contains: .blocks.
+    old_suffix: .17.num_batches_tracked
+    new_suffix: .27.num_batches_tracked
+  - when_contains: .blocks.
+    old_suffix: .20.weight
+    new_suffix: .32.weight
+  - when_contains: .blocks.
+    old_suffix: .20.bias
+    new_suffix: .32.bias
+  - when_contains: .blocks.
+    old_suffix: .20.running_mean
+    new_suffix: .32.running_mean
+  - when_contains: .blocks.
+    old_suffix: .20.running_var
+    new_suffix: .32.running_var
+  - when_contains: .blocks.
+    old_suffix: .20.num_batches_tracked
+    new_suffix: .32.num_batches_tracked
+  - when_contains: .blocks.
+    old_suffix: .23.weight
+    new_suffix: .37.weight
+  - when_contains: .blocks.
+    old_suffix: .23.bias
+    new_suffix: .37.bias
+  - when_contains: .blocks.
+    old_suffix: .23.running_mean
+    new_suffix: .37.running_mean
+  - when_contains: .blocks.
+    old_suffix: .23.running_var
+    new_suffix: .37.running_var
+  - when_contains: .blocks.
+    old_suffix: .23.num_batches_tracked
+    new_suffix: .37.num_batches_tracked
+  - when_contains: .blocks.
+    old_suffix: .26.weight
+    new_suffix: .42.weight
+  - when_contains: .blocks.
+    old_suffix: .26.bias
+    new_suffix: .42.bias
+  - when_contains: .blocks.
+    old_suffix: .26.running_mean
+    new_suffix: .42.running_mean
+  - when_contains: .blocks.
+    old_suffix: .26.running_var
+    new_suffix: .42.running_var
+  - when_contains: .blocks.
+    old_suffix: .26.num_batches_tracked
+    new_suffix: .42.num_batches_tracked
   - when_contains: .deblocks.
     old_suffix: .0.weight
     new_suffix: .0.conv_t.weight
