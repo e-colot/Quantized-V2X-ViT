@@ -56,3 +56,7 @@ compression:
         type: fp32
         bn_type: fp32
         relu_type: fp32
+transformer:
+  quantize:
+    sttf:
+      type: fp32

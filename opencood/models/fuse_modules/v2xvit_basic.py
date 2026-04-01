@@ -6,29 +6,36 @@ from opencood.models.fuse_modules.mswin import *
 from opencood.models.sub_modules.torch_transformation_utils import \
     get_transformation_matrix, warp_affine, get_roi_and_cav_mask, \
     get_discretized_transformation_matrix
+from opencood.tools.quantization_utils import AffineFakeQuantizer
 
 
 class STTF(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, quantize_cfg):
         super(STTF, self).__init__()
         self.discrete_ratio = args['voxel_size'][0]
         self.downsample_rate = args['downsample_rate']
+        self.quantizer = AffineFakeQuantizer(quantize_cfg['type'])
 
     def forward(self, x, mask, spatial_correction_matrix):
         x = x.permute(0, 1, 4, 2, 3)
+        x = self.quantizer(x)
         dist_correction_matrix = get_discretized_transformation_matrix(
             spatial_correction_matrix, self.discrete_ratio,
-            self.downsample_rate)
+            self.downsample_rate,
+            self.quantizer)
         # Only compensate non-ego vehicles
         B, L, C, H, W = x.shape
 
         T = get_transformation_matrix(
-            dist_correction_matrix[:, 1:, :, :].reshape(-1, 2, 3), (H, W))
+            dist_correction_matrix[:, 1:, :, :].reshape(-1, 2, 3), (H, W), self.quantizer)
         cav_features = warp_affine(x[:, 1:, :, :, :].reshape(-1, C, H, W), T,
-                                   (H, W))
+                                   (H, W), self.quantizer)
+        cav_features = self.quantizer(cav_features)
         cav_features = cav_features.reshape(B, -1, C, H, W)
         x = torch.cat([x[:, 0, :, :, :].unsqueeze(1), cav_features], dim=1)
+        x = self.quantizer(x)
         x = x.permute(0, 1, 3, 4, 2)
+        x = self.quantizer(x)
         return x
 
 
@@ -121,7 +128,7 @@ class V2XFusionBlock(nn.Module):
 
 
 class V2XTEncoder(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, quantize_cfg):
         super().__init__()
 
         cav_att_config = args['cav_att_config']
@@ -138,7 +145,7 @@ class V2XTEncoder(nn.Module):
         self.use_roi_mask = args['use_roi_mask']
         self.use_RTE = cav_att_config['use_RTE']
         self.RTE_ratio = cav_att_config['RTE_ratio']
-        self.sttf = STTF(args['sttf'])
+        self.sttf = STTF(args['sttf'], quantize_cfg['sttf'])
         # adjust the channel numbers from 256+3 -> 256
         self.prior_feed = nn.Linear(cav_att_config['dim'] + 3,
                                     cav_att_config['dim'])
@@ -183,7 +190,8 @@ class V2XTransformer(nn.Module):
         super(V2XTransformer, self).__init__()
 
         encoder_args = args['encoder']
-        self.encoder = V2XTEncoder(encoder_args)
+        encoder_quantize_cfg = args['quantize']
+        self.encoder = V2XTEncoder(encoder_args, encoder_quantize_cfg)
 
     def forward(self, x, mask, spatial_correction_matrix):
         output = self.encoder(x, mask, spatial_correction_matrix)

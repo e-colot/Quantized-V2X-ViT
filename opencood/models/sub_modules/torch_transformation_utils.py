@@ -8,8 +8,14 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+def _apply_quantizer(x, quantizer=None):
+    if quantizer is None:
+        return x
+    return quantizer(x)
+
 def get_roi_and_cav_mask(shape, cav_mask, spatial_correction_matrix,
-                         discrete_ratio, downsample_rate):
+                         discrete_ratio, downsample_rate, quantizer=None):
     """
     Get mask for the combination of cav_mask and rorated ROI mask.
     Parameters
@@ -36,12 +42,12 @@ def get_roi_and_cav_mask(shape, cav_mask, spatial_correction_matrix,
     # (B,L,4,4)
     dist_correction_matrix = get_discretized_transformation_matrix(
         spatial_correction_matrix, discrete_ratio,
-        downsample_rate)
+        downsample_rate, quantizer)
     # (B*L,2,3)
     T = get_transformation_matrix(
-        dist_correction_matrix.reshape(-1, 2, 3), (H, W))
+        dist_correction_matrix.reshape(-1, 2, 3), (H, W), quantizer)
     # (B,L,1,H,W)
-    roi_mask = get_rotated_roi((B, L, C, H, W), T)
+    roi_mask = get_rotated_roi((B, L, C, H, W), T, quantizer)
     # (B,L,1,H,W)
     com_mask = combine_roi_and_cav_mask(roi_mask, cav_mask)
     # (B,H,W,1,L)
@@ -74,7 +80,7 @@ def combine_roi_and_cav_mask(roi_mask, cav_mask):
     return com_mask
 
 
-def get_rotated_roi(shape, correction_matrix):
+def get_rotated_roi(shape, correction_matrix, quantizer=None):
     """
     Get rorated ROI mask.
 
@@ -97,9 +103,10 @@ def get_rotated_roi(shape, correction_matrix):
     # (B,L,1,H,W)
     x = torch.ones((B, L, 1, H, W)).to(correction_matrix.dtype).to(
         correction_matrix.device)
+    x = _apply_quantizer(x, quantizer)
     # (B*L,1,H,W)
     roi_mask = warp_affine(x.reshape(-1, 1, H, W), correction_matrix,
-                           dsize=(H, W), mode="nearest")
+                           dsize=(H, W), quantizer=quantizer, mode="nearest")
     # (B,L,C,H,W)
     roi_mask = torch.repeat_interleave(roi_mask, C, dim=1).reshape(B, L, C, H,
                                                                    W)
@@ -107,7 +114,7 @@ def get_rotated_roi(shape, correction_matrix):
 
 
 def get_discretized_transformation_matrix(matrix, discrete_ratio,
-                                          downsample_rate):
+                                          downsample_rate, quantizer=None):
     """
     Get disretized transformation matrix.
     Parameters
@@ -129,13 +136,17 @@ def get_discretized_transformation_matrix(matrix, discrete_ratio,
     """
     matrix = matrix[:, :, [0, 1], :][:, :, :, [0, 1, 3]]
     # normalize the x,y transformation
+    matrix = _apply_quantizer(matrix, quantizer)
+    factor = matrix.new_tensor(discrete_ratio * downsample_rate)
+    factor = _apply_quantizer(factor, quantizer)
     matrix[:, :, :, -1] = matrix[:, :, :, -1] \
-                          / (discrete_ratio * downsample_rate)
+                          / (factor + 1e-8)
+    matrix = _apply_quantizer(matrix, quantizer)
 
     return matrix.type(dtype=torch.float)
 
 
-def _torch_inverse_cast(input):
+def _torch_inverse_cast(input, quantizer=None):
     r"""
     Helper function to make torch.inverse work with other than fp32/64.
     The function torch.inverse is only implemented for fp32/64 which makes
@@ -155,11 +166,12 @@ def _torch_inverse_cast(input):
     if dtype not in (torch.float32, torch.float64):
         dtype = torch.float32
     out = torch.inverse(input.to(dtype)).to(input.dtype)
+    out = _apply_quantizer(out, quantizer)
     return out
 
 
 def normal_transform_pixel(
-        height, width, device, dtype, eps=1e-14):
+        height, width, device, dtype, quantizer=None, eps=1e-14):
     r"""
     Compute the normalization matrix from image size in pixels to [-1, 1].
     Args:
@@ -189,6 +201,8 @@ def normal_transform_pixel(
     tr_mat[0, 0] = tr_mat[0, 0] * 2.0 / width_denom
     tr_mat[1, 1] = tr_mat[1, 1] * 2.0 / height_denom
 
+    tr_mat = _apply_quantizer(tr_mat, quantizer)
+
     return tr_mat.unsqueeze(0)  # 1x3x3
 
 
@@ -214,7 +228,7 @@ def eye_like(n, B, device, dtype):
     return identity[None].repeat(B, 1, 1)
 
 
-def normalize_homography(dst_pix_trans_src_pix, dsize_src, dsize_dst=None):
+def normalize_homography(dst_pix_trans_src_pix, dsize_src, quantizer=None, dsize_dst=None):
     r"""
     Normalize a given homography in pixels to [-1, 1].
     Args:
@@ -239,20 +253,22 @@ def normalize_homography(dst_pix_trans_src_pix, dsize_src, dsize_dst=None):
     dtype = dst_pix_trans_src_pix.dtype
     # compute the transformation pixel/norm for src/dst
     src_norm_trans_src_pix = normal_transform_pixel(src_h, src_w, device,
-                                                    dtype).to(
+                                                    dtype, quantizer).to(
         dst_pix_trans_src_pix)
 
-    src_pix_trans_src_norm = _torch_inverse_cast(src_norm_trans_src_pix)
+    src_pix_trans_src_norm = _torch_inverse_cast(src_norm_trans_src_pix, quantizer)
     dst_norm_trans_dst_pix = normal_transform_pixel(dst_h, dst_w, device,
-                                                    dtype).to(
+                                                    dtype, quantizer).to(
         dst_pix_trans_src_pix)
     # compute chain transformations
     dst_norm_trans_src_norm: torch.Tensor = dst_norm_trans_dst_pix @ (
             dst_pix_trans_src_pix @ src_pix_trans_src_norm)
+    dst_norm_trans_src_norm = _apply_quantizer(dst_norm_trans_src_norm,
+                                               quantizer)
     return dst_norm_trans_src_norm
 
 
-def get_rotation_matrix2d(M, dsize):
+def get_rotation_matrix2d(M, dsize, quantizer=None):
     r"""
     Return rotation matrix for torch.affine_grid based on transformation matrix.
     Args:
@@ -270,17 +286,22 @@ def get_rotation_matrix2d(M, dsize):
     center = torch.Tensor([W / 2, H / 2]).to(M.dtype).to(M.device).unsqueeze(0)
     shift_m = eye_like(3, B, M.device, M.dtype)
     shift_m[:, :2, 2] = center
+    shift_m = _apply_quantizer(shift_m, quantizer)
 
     shift_m_inv = eye_like(3, B, M.device, M.dtype)
     shift_m_inv[:, :2, 2] = -center
+    shift_m_inv = _apply_quantizer(shift_m_inv, quantizer)
 
     rotat_m = eye_like(3, B, M.device, M.dtype)
     rotat_m[:, :2, :2] = M[:, :2, :2]
+    rotat_m = _apply_quantizer(rotat_m, quantizer)
+
     affine_m = shift_m @ rotat_m @ shift_m_inv
+    affine_m = _apply_quantizer(affine_m, quantizer)
     return affine_m[:, :2, :]  # Bx2x3
 
 
-def get_transformation_matrix(M, dsize):
+def get_transformation_matrix(M, dsize, quantizer=None):
     r"""
     Return transformation matrix for torch.affine_grid.
     Args:
@@ -293,8 +314,9 @@ def get_transformation_matrix(M, dsize):
         T : torch.Tensor
             Transformation matrix with shape :math:`(N, 2, 3)`.
     """
-    T = get_rotation_matrix2d(M, dsize)
+    T = get_rotation_matrix2d(M, dsize, quantizer)
     T[..., 2] += M[..., 2]
+    T = _apply_quantizer(T, quantizer)
     return T
 
 
@@ -316,7 +338,7 @@ def convert_affinematrix_to_homography(A):
 
 
 def warp_affine(
-        src, M, dsize,
+    src, M, dsize, quantizer=None,
         mode='bilinear',
         padding_mode='zeros',
         align_corners=True):
@@ -344,17 +366,21 @@ def warp_affine(
 
     # we generate a 3x3 transformation matrix from 2x3 affine
     M_3x3 = convert_affinematrix_to_homography(M)
-    dst_norm_trans_src_norm = normalize_homography(M_3x3, (H, W), dsize)
+    M_3x3 = _apply_quantizer(M_3x3, quantizer)
+    dst_norm_trans_src_norm = normalize_homography(M_3x3, (H, W), quantizer,
+                                                   dsize)
 
     # src_norm_trans_dst_norm = torch.inverse(dst_norm_trans_src_norm)
-    src_norm_trans_dst_norm = _torch_inverse_cast(dst_norm_trans_src_norm)
+    src_norm_trans_dst_norm = _torch_inverse_cast(dst_norm_trans_src_norm, quantizer)
     grid = F.affine_grid(src_norm_trans_dst_norm[:, :2, :],
                          [B, C, dsize[0], dsize[1]],
                          align_corners=align_corners)
+    grid = _apply_quantizer(grid, quantizer)
 
-    return F.grid_sample(src.half() if grid.dtype==torch.half else src, 
-                         grid, align_corners=align_corners, mode=mode,
-                         padding_mode=padding_mode)
+    out = F.grid_sample(src.half() if grid.dtype == torch.half else src,
+                        grid, align_corners=align_corners, mode=mode,
+                        padding_mode=padding_mode)
+    return _apply_quantizer(out, quantizer)
 
 
 class Test:
