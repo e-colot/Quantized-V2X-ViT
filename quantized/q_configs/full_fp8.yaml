@@ -1,0 +1,66 @@
+name: 'FP8 full quantization'
+
+pillar_vfe:
+  quantize:
+    PFN:
+      type: fp8
+      quantize_relu: true
+      relu_type: fp8
+    features:
+      type: fp8
+point_pillar_scatter:
+  quantize:
+    features:
+      type: fp8
+base_bev_backbone:
+  quantize:
+    layers:
+      - conv:
+          type: fp8
+        batchnorm:
+          quantize_batchnorm: true
+          type: fp8
+        relu:
+          quantize_relu: true
+          type: fp8
+      - conv:
+          type: fp8
+        batchnorm:
+          quantize_batchnorm: true
+          type: fp8
+        relu:
+          quantize_relu: true
+          type: fp8
+      - conv:
+          type: fp8
+        batchnorm:
+          quantize_batchnorm: true
+          type: fp8
+        relu:
+          quantize_relu: true
+          type: fp8
+    upsample:
+      - convTranspose:
+          type: fp8
+        batchnorm:
+          quantize_batchnorm: true
+          type: fp8
+        relu:
+          quantize_relu: true
+          type: fp8
+      - convTranspose:
+          type: fp8
+        batchnorm:
+          quantize_batchnorm: true
+          type: fp8
+        relu:
+          quantize_relu: true
+          type: fp8
+      - convTranspose:
+          type: fp8
+        batchnorm:
+          quantize_batchnorm: true
+          type: fp8
+        relu:
+          quantize_relu: true
+          type: fp8

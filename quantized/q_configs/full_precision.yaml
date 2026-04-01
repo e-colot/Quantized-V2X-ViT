@@ -1,0 +1,66 @@
+name: 'full precision quantization'
+
+pillar_vfe:
+  quantize:
+    PFN:
+      type: fp32
+      quantize_relu: false
+      relu_type: fp32
+    features:
+      type: fp32
+point_pillar_scatter:
+  quantize:
+    features:
+      type: fp32
+base_bev_backbone:
+  quantize:
+    layers:
+      - conv:
+          type: fp32
+        batchnorm:
+          quantize_batchnorm: false
+          type: fp32
+        relu:
+          quantize_relu: false
+          type: fp32
+      - conv:
+          type: fp32
+        batchnorm:
+          quantize_batchnorm: false
+          type: fp32
+        relu:
+          quantize_relu: false
+          type: fp32
+      - conv:
+          type: fp32
+        batchnorm:
+          quantize_batchnorm: false
+          type: fp32
+        relu:
+          quantize_relu: false
+          type: fp32
+    upsample:
+      - convTranspose:
+          type: fp32
+        batchnorm:
+          quantize_batchnorm: false
+          type: fp32
+        relu:
+          quantize_relu: false
+          type: fp32
+      - convTranspose:
+          type: fp32
+        batchnorm:
+          quantize_batchnorm: false
+          type: fp32
+        relu:
+          quantize_relu: false
+          type: fp32
+      - convTranspose:
+          type: fp32
+        batchnorm:
+          quantize_batchnorm: false
+          type: fp32
+        relu:
+          quantize_relu: false
+          type: fp32
