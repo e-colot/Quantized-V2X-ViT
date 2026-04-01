@@ -1,4 +1,4 @@
-version: 0.4
+version: 0.6
 notes: Key remapping rules to load legacy checkpoints after quantization wrappers are introduced.
 rules:
 # PillarVFE
@@ -238,3 +238,22 @@ rules:
   - when_prefix: naive_compressor.
     old_suffix: .decoder.4.num_batches_tracked
     new_suffix: .decoder.6.num_batches_tracked
+
+# V2XTEncoder (transformer)
+  - when_prefix: fusion_net.encoder.prior_feed
+    old_suffix: .weight
+    new_suffix: .linear.weight
+  - when_prefix: fusion_net.encoder.prior_feed
+    old_suffix: .bias
+    new_suffix: .linear.bias
+
+# V2XTEncoder RTE (quantized embedding/linear wrappers)
+  - when_prefix: fusion_net.encoder.rte.emb.emb
+    old_suffix: .weight
+    new_suffix: .embedding.weight
+  - when_prefix: fusion_net.encoder.rte.emb.lin
+    old_suffix: .weight
+    new_suffix: .linear.weight
+  - when_prefix: fusion_net.encoder.rte.emb.lin
+    old_suffix: .bias
+    new_suffix: .linear.bias

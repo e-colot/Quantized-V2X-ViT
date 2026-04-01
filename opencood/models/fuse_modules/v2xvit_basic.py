@@ -6,7 +6,7 @@ from opencood.models.fuse_modules.mswin import *
 from opencood.models.sub_modules.torch_transformation_utils import \
     get_transformation_matrix, warp_affine, get_roi_and_cav_mask, \
     get_discretized_transformation_matrix
-from opencood.tools.quantization_utils import AffineFakeQuantizer
+from opencood.tools.quantization_utils import QuantizedLinear, QuantizedEmbedding, AffineFakeQuantizer
 
 
 class STTF(nn.Module):
@@ -44,34 +44,38 @@ class RelTemporalEncoding(nn.Module):
     Implement the Temporal Encoding (Sinusoid) function.
     """
 
-    def __init__(self, n_hid, RTE_ratio, max_len=100, dropout=0.2):
+    def __init__(self, n_hid, RTE_ratio, quantize_cfg, max_len=100, dropout=0.2):
         super(RelTemporalEncoding, self).__init__()
+
         position = torch.arange(0., max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, n_hid, 2) *
                              -(math.log(10000.0) / n_hid))
-        emb = nn.Embedding(max_len, n_hid)
-        emb.weight.data[:, 0::2] = torch.sin(position * div_term) / math.sqrt(
-            n_hid)
-        emb.weight.data[:, 1::2] = torch.cos(position * div_term) / math.sqrt(
-            n_hid)
-        emb.requires_grad = False
+        emb = QuantizedEmbedding(max_len, n_hid, 
+                quantize_cfg=quantize_cfg.get('embedding', {}), cfg_name='RTE embedding',
+        )
+        with torch.no_grad():
+            emb.weight[:, 0::2] = torch.sin(position * div_term) / math.sqrt(n_hid)
+            emb.weight[:, 1::2] = torch.cos(position * div_term) / math.sqrt(n_hid)
+            emb.weight.requires_grad_(False)
         self.RTE_ratio = RTE_ratio
         self.emb = emb
-        self.lin = nn.Linear(n_hid, n_hid)
+        self.lin = QuantizedLinear(n_hid, n_hid, quantize_cfg=quantize_cfg['output'])
+
+        self.output_quantizer = AffineFakeQuantizer(quantize_cfg['output']['type'])
 
     def forward(self, x, t):
         # When t has unit of 50ms, rte_ratio=1.
         # So we can train on 100ms but test on 50ms
-        return x + self.lin(self.emb(t * self.RTE_ratio)).unsqueeze(
+        return self.output_quantizer(x + self.lin(self.emb(t * self.RTE_ratio))).unsqueeze(
             0).unsqueeze(1)
 
 
 class RTE(nn.Module):
-    def __init__(self, dim, RTE_ratio=2):
+    def __init__(self, dim, quantize_cfg, RTE_ratio=2):
         super(RTE, self).__init__()
         self.RTE_ratio = RTE_ratio
 
-        self.emb = RelTemporalEncoding(dim, RTE_ratio=self.RTE_ratio)
+        self.emb = RelTemporalEncoding(dim, RTE_ratio=self.RTE_ratio, quantize_cfg=quantize_cfg)
 
     def forward(self, x, dts):
         # x: (B,L,H,W,C)
@@ -147,11 +151,11 @@ class V2XTEncoder(nn.Module):
         self.RTE_ratio = cav_att_config['RTE_ratio']
         self.sttf = STTF(args['sttf'], quantize_cfg['sttf'])
         # adjust the channel numbers from 256+3 -> 256
-        self.prior_feed = nn.Linear(cav_att_config['dim'] + 3,
-                                    cav_att_config['dim'])
+        self.prior_feed = QuantizedLinear(cav_att_config['dim'] + 3,
+                                    cav_att_config['dim'], quantize_cfg=quantize_cfg['V2XTEncoderLinear'])
         self.layers = nn.ModuleList([])
         if self.use_RTE:
-            self.rte = RTE(cav_att_config['dim'], self.RTE_ratio)
+            self.rte = RTE(cav_att_config['dim'], quantize_cfg=quantize_cfg['RTE'], RTE_ratio=self.RTE_ratio)
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 V2XFusionBlock(num_blocks, cav_att_config, pwindow_att_config),

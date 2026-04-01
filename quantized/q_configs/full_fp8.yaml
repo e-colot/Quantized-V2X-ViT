@@ -56,4 +56,14 @@ compression:
         type: fp8
         bn_type: fp8
         relu_type: fp8
-        
+transformer:
+  quantize:
+    sttf:
+      type: fp32
+    V2XTEncoderLinear:
+      type: fp32
+    RTE:
+      embedding:
+        type: fp32
+      output:
+        type: fp32

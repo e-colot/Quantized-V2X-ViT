@@ -604,3 +604,61 @@ class QuantizedConvTranspose2D(nn.Module):
             dilation=self.conv_t.dilation,
         )
 
+
+class QuantizedEmbedding(nn.Module):
+    """
+    Fake-quantized Embedding layer with weight/output quantization config.
+    """
+
+    def __init__(self,
+                 num_embeddings,
+                 embedding_dim,
+                 padding_idx=None,
+                 max_norm=None,
+                 norm_type=2.0,
+                 scale_grad_by_freq=False,
+                 sparse=False,
+                 _weight=None,
+                 device=None,
+                 dtype=None,
+                 quantize_cfg=None,
+                 cfg_name='quantized embedding'):
+        super().__init__()
+        self.embedding = nn.Embedding(
+            num_embeddings=num_embeddings,
+            embedding_dim=embedding_dim,
+            padding_idx=padding_idx,
+            max_norm=max_norm,
+            norm_type=norm_type,
+            scale_grad_by_freq=scale_grad_by_freq,
+            sparse=sparse,
+            _weight=_weight,
+            device=device,
+            dtype=dtype,
+        )
+
+        a_cfg, w_cfg = _qparser_cfg(
+            quantize_cfg=quantize_cfg,
+            split_param_keys=('type_a', 'type_w'),
+            cfg_name=cfg_name,
+        )
+        self.quant_a = AffineFakeQuantizer(a_cfg['type'])
+        self.quant_w = AffineFakeQuantizer(w_cfg['type'])
+
+    @property
+    def weight(self):
+        return self.embedding.weight
+
+    def forward(self, x):
+        w_q = self.quant_w(self.embedding.weight)
+        out = F.embedding(
+            x,
+            w_q,
+            padding_idx=self.embedding.padding_idx,
+            max_norm=self.embedding.max_norm,
+            norm_type=self.embedding.norm_type,
+            scale_grad_by_freq=self.embedding.scale_grad_by_freq,
+            sparse=self.embedding.sparse,
+        )
+        return self.quant_a(out)
+

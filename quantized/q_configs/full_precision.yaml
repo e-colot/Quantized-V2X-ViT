@@ -60,3 +60,10 @@ transformer:
   quantize:
     sttf:
       type: fp32
+    V2XTEncoderLinear:
+      type: fp32
+    RTE:
+      embedding:
+        type: fp32
+      output:
+        type: fp32
