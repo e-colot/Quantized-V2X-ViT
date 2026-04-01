@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 class Arguments:
     model_dir = 'opencood/v2x-vit'
     fusion_method = 'intermediate'
-    quantization_yaml = 'quantized/q_configs/full_fp8.yaml'
+    quantization_yaml = 'quantized/q_configs/full_precision.yaml'
     checkpoint_compat_yaml = 'quantized/checkpoint_compat.yaml'
     show_vis = False
     show_sequence = False

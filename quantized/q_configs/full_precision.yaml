@@ -64,3 +64,16 @@ base_bev_backbone:
         relu:
           quantize_relu: false
           type: fp32
+shrink_header:
+  quantize:
+    - conv1:
+        type: fp32
+      relu1:
+        quantize_relu: false
+        type: fp32
+      conv2:
+        type: fp32
+      relu2:
+        quantize_relu: false
+        type: fp32
+        

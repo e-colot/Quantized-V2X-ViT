@@ -64,3 +64,15 @@ base_bev_backbone:
         relu:
           quantize_relu: true
           type: fp8
+shrink_header:
+  quantize:
+    - conv1:
+        type: fp8
+      relu1:
+        quantize_relu: true
+        type: fp8
+      conv2:
+        type: fp8
+      relu2:
+        quantize_relu: true
+        type: fp8

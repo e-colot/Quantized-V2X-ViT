@@ -1,4 +1,4 @@
-version: 0.2
+version: 0.3
 notes: Key remapping rules to load legacy checkpoints after quantization wrappers are introduced.
 rules:
 # PillarVFE
@@ -189,3 +189,17 @@ rules:
   - when_contains: .deblocks.
     old_suffix: .0.bias
     new_suffix: .0.conv_t.bias
+
+# DownsampleConv (shrink_header)
+  - when_prefix: shrink_conv.
+    old_suffix: .double_conv.0.weight
+    new_suffix: .double_conv.0.conv.weight
+  - when_prefix: shrink_conv.
+    old_suffix: .double_conv.0.bias
+    new_suffix: .double_conv.0.conv.bias
+  - when_prefix: shrink_conv.
+    old_suffix: .double_conv.2.weight
+    new_suffix: .double_conv.3.conv.weight
+  - when_prefix: shrink_conv.
+    old_suffix: .double_conv.2.bias
+    new_suffix: .double_conv.3.conv.bias
