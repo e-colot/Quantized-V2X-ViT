@@ -7,6 +7,7 @@ import numpy as np
 
 from einops import rearrange
 from opencood.models.sub_modules.split_attn import SplitAttn
+from opencood.tools.quantization_utils import QuantizedLinear, AffineFakeQuantizer
 
 
 def get_relative_distances(window_size):
@@ -18,7 +19,7 @@ def get_relative_distances(window_size):
 
 class BaseWindowAttention(nn.Module):
     def __init__(self, dim, heads, dim_head, drop_out, window_size,
-                 relative_pos_embedding):
+                 relative_pos_embedding, quantize_cfg):
         super().__init__()
         inner_dim = dim_head * heads
 
@@ -27,7 +28,7 @@ class BaseWindowAttention(nn.Module):
         self.window_size = window_size
         self.relative_pos_embedding = relative_pos_embedding
 
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.to_qkv = QuantizedLinear(dim, inner_dim * 3, bias=False, quantize_cfg=quantize_cfg['qkv'])
 
         if self.relative_pos_embedding:
             self.relative_indices = get_relative_distances(window_size) + \
@@ -39,9 +40,11 @@ class BaseWindowAttention(nn.Module):
                                                           window_size ** 2))
 
         self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
+            QuantizedLinear(inner_dim, dim, quantize_cfg=quantize_cfg['output']),
             nn.Dropout(drop_out)
         )
+
+        self.attnQuantizer = AffineFakeQuantizer(quantize_cfg['attn_type'])
 
     def forward(self, x):
         b, l, h, w, c, m = *x.shape, self.heads
@@ -57,8 +60,8 @@ class BaseWindowAttention(nn.Module):
                                 m=m, w_h=self.window_size,
                                 w_w=self.window_size), qkv)
         # b l m h window_size window_size
-        dots = torch.einsum('b l m h i c, b l m h j c -> b l m h i j',
-                            q, k, ) * self.scale
+        dots = self.attnQuantizer(torch.einsum('b l m h i c, b l m h j c -> b l m h i j',
+                            q, k, ) * self.scale)
         # consider prior knowledge of the local window
         if self.relative_pos_embedding:
             dots += self.pos_embedding[self.relative_indices[:, :, 0],
@@ -66,7 +69,9 @@ class BaseWindowAttention(nn.Module):
         else:
             dots += self.pos_embedding
 
-        attn = dots.softmax(dim=-1)
+        dots = self.attnQuantizer(dots)
+
+        attn = self.attnQuantizer(dots.softmax(dim=-1))
 
         out = torch.einsum('b l m h i j, b l m h j c -> b l m h i c', attn, v)
         # b l h w c
@@ -82,7 +87,7 @@ class BaseWindowAttention(nn.Module):
 
 class PyramidWindowAttention(nn.Module):
     def __init__(self, dim, heads, dim_heads, drop_out, window_size,
-                 relative_pos_embedding, fuse_method='naive'):
+                 relative_pos_embedding, quantize_cfg, fuse_method='naive'):
         super().__init__()
 
         assert isinstance(window_size, list)
@@ -98,7 +103,8 @@ class PyramidWindowAttention(nn.Module):
                                                   dim_head,
                                                   drop_out,
                                                   ws,
-                                                  relative_pos_embedding))
+                                                  relative_pos_embedding,
+                                                  quantize_cfg=quantize_cfg['baseWin']))
         self.fuse_mehod = fuse_method
         if fuse_method == 'split_attn':
             self.split_attn = SplitAttn(256)

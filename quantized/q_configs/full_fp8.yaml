@@ -69,7 +69,8 @@ transformer:
         type: fp32
     V2XFusionBlock:
       hmsa:
-      # not full control, could be finer as 'core' module of ViT
+        preNorm:
+          type: fp8
         linearIn:
           type: fp8
         linearOut:
@@ -78,3 +79,12 @@ transformer:
           type: fp8
         attentionMap:
           type: fp8
+      MSwin:
+        preNorm:
+          type: fp8
+        baseWin:
+          qkv:
+            type: fp8
+          output:
+            type: fp8
+          attn_type: fp8

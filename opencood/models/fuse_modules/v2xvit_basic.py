@@ -115,7 +115,7 @@ class V2XFusionBlock(nn.Module):
                              dim_head=cav_att_config['dim_head'],
                              dropout=cav_att_config['dropout'])
             self.layers.append(nn.ModuleList([
-                PreNorm(cav_att_config['dim'], att),
+                PreNorm(cav_att_config['dim'], att, quantize_cfg=quantize_cfg['hmsa']['preNorm']),
                 PreNorm(cav_att_config['dim'],
                         PyramidWindowAttention(pwindow_config['dim'],
                                                heads=pwindow_config['heads'],
@@ -129,7 +129,9 @@ class V2XFusionBlock(nn.Module):
                                                pwindow_config[
                                                    'relative_pos_embedding'],
                                                fuse_method=pwindow_config[
-                                                   'fusion_method']))]))
+                                                   'fusion_method'],
+                                               quantize_cfg=quantize_cfg['MSwin']),
+                        quantize_cfg=quantize_cfg['MSwin']['preNorm'])]))
 
     def forward(self, x, mask, prior_encoding):
         for cav_attn, pwindow_attn in self.layers:
@@ -169,7 +171,8 @@ class V2XTEncoder(nn.Module):
                                quantize_cfg=quantize_cfg['V2XFusionBlock']),
                 PreNorm(cav_att_config['dim'],
                         FeedForward(cav_att_config['dim'], mlp_dim,
-                                    dropout=dropout))
+                                    dropout=dropout),
+                    quantize_cfg=quantize_cfg['V2XFusionBlock']['MSwin']['preNorm'])
             ]))
 
     def forward(self, x, mask, spatial_correction_matrix):

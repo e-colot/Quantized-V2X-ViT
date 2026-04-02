@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 from einops import rearrange
-
+from opencood.tools.quantization_utils import AffineFakeQuantizer
 
 class PreNormResidual(nn.Module):
     def __init__(self, dim, fn):
@@ -15,13 +15,18 @@ class PreNormResidual(nn.Module):
 
 
 class PreNorm(nn.Module):
-    def __init__(self, dim, fn):
+    """
+    Note that the quantization is applied on the norm only.
+    The output data type only depends on the given function fn
+    """
+    def __init__(self, dim, fn, quantize_cfg):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
+        self.normQuantizer = AffineFakeQuantizer(quantize_cfg['type'])
         self.fn = fn
 
     def forward(self, x, **kwargs):
-        return self.fn(self.norm(x), **kwargs)
+        return self.fn(self.normQuantizer(self.norm(x)), **kwargs)
 
 
 class FeedForward(nn.Module):

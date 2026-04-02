@@ -78,3 +78,14 @@ transformer:
           type: fp32
         attentionMap:
           type: fp32
+        preNorm:
+          type: fp32
+      MSwin:
+        preNorm:
+          type: fp32
+        baseWin:
+          qkv:
+            type: fp32
+          output:
+            type: fp32
+          attn_type: fp32
