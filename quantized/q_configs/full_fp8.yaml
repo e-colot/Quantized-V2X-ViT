@@ -67,3 +67,14 @@ transformer:
         type: fp32
       output:
         type: fp32
+    V2XFusionBlock:
+      hmsa:
+      # not full control, could be finer as 'core' module of ViT
+        linearIn:
+          type: fp8
+        linearOut:
+          type: fp8
+        relation:
+          type: fp8
+        attentionMap:
+          type: fp8

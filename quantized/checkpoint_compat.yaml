@@ -1,4 +1,4 @@
-version: 0.6
+version: 0.7
 notes: Key remapping rules to load legacy checkpoints after quantization wrappers are introduced.
 rules:
 # PillarVFE
@@ -255,5 +255,31 @@ rules:
     old_suffix: .weight
     new_suffix: .linear.weight
   - when_prefix: fusion_net.encoder.rte.emb.lin
+    old_suffix: .bias
+    new_suffix: .linear.bias
+
+# HGTCavAttention (quantized linears)
+  - when_contains: .fn.k_linears.
+    old_suffix: .weight
+    new_suffix: .linear.weight
+  - when_contains: .fn.k_linears.
+    old_suffix: .bias
+    new_suffix: .linear.bias
+  - when_contains: .fn.q_linears.
+    old_suffix: .weight
+    new_suffix: .linear.weight
+  - when_contains: .fn.q_linears.
+    old_suffix: .bias
+    new_suffix: .linear.bias
+  - when_contains: .fn.v_linears.
+    old_suffix: .weight
+    new_suffix: .linear.weight
+  - when_contains: .fn.v_linears.
+    old_suffix: .bias
+    new_suffix: .linear.bias
+  - when_contains: .fn.a_linears.
+    old_suffix: .weight
+    new_suffix: .linear.weight
+  - when_contains: .fn.a_linears.
     old_suffix: .bias
     new_suffix: .linear.bias

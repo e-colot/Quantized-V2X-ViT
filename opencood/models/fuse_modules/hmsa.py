@@ -3,9 +3,11 @@ from torch import nn
 
 from einops import rearrange
 
+from opencood.tools.quantization_utils import QuantizedLinear, AffineFakeQuantizer
+
 
 class HGTCavAttention(nn.Module):
-    def __init__(self, dim, heads, num_types=2,
+    def __init__(self, dim, heads, quantize_cfg, num_types=2,
                  num_relations=4, dim_head=64, dropout=0.1):
         super().__init__()
         inner_dim = heads * dim_head
@@ -14,26 +16,35 @@ class HGTCavAttention(nn.Module):
         self.scale = dim_head ** -0.5
         self.num_types = num_types
 
-        self.attend = nn.Softmax(dim=-1)
-        self.drop_out = nn.Dropout(dropout)
+        self.attend = nn.Sequential(
+            nn.Softmax(dim=-1),
+            AffineFakeQuantizer(quantize_cfg['attentionMap']['type'])
+        )
+        self.drop_out = nn.Dropout(dropout) # no need to quantize (training only module)
         self.k_linears = nn.ModuleList()
         self.q_linears = nn.ModuleList()
         self.v_linears = nn.ModuleList()
         self.a_linears = nn.ModuleList()
         self.norms = nn.ModuleList()
         for t in range(num_types):
-            self.k_linears.append(nn.Linear(dim, inner_dim))
-            self.q_linears.append(nn.Linear(dim, inner_dim))
-            self.v_linears.append(nn.Linear(dim, inner_dim))
-            self.a_linears.append(nn.Linear(inner_dim, dim))
+            self.k_linears.append(QuantizedLinear(dim, inner_dim, quantize_cfg=quantize_cfg['linearIn']))
+            self.q_linears.append(QuantizedLinear(dim, inner_dim, quantize_cfg=quantize_cfg['linearIn']))
+            self.v_linears.append(QuantizedLinear(dim, inner_dim, quantize_cfg=quantize_cfg['linearIn']))
+            self.a_linears.append(QuantizedLinear(inner_dim, dim, quantize_cfg=quantize_cfg['linearOut']))
 
         self.relation_att = nn.Parameter(
             torch.Tensor(num_relations, heads, dim_head, dim_head))
         self.relation_msg = nn.Parameter(
             torch.Tensor(num_relations, heads, dim_head, dim_head))
 
+        self.relation_quantizer = AffineFakeQuantizer(quantize_cfg['relation']['type'])
+        self.attentionMapQuantizer = AffineFakeQuantizer(quantize_cfg['attentionMap']['type'])
+        self.outQuantizer = AffineFakeQuantizer(quantize_cfg['linearOut']['type'])
+
         torch.nn.init.xavier_uniform_(self.relation_att)
         torch.nn.init.xavier_uniform_(self.relation_msg)
+
+
 
     def to_qkv(self, x, types):
         # x: (B,H,W,L,C)
@@ -69,6 +80,9 @@ class HGTCavAttention(nn.Module):
         return type1 * self.num_types + type2
 
     def get_hetero_edge_weights(self, x, types):
+        relation_att = self.relation_quantizer(self.relation_att)
+        relation_msg = self.relation_quantizer(self.relation_msg)
+
         w_att_batch = []
         w_msg_batch = []
 
@@ -83,8 +97,8 @@ class HGTCavAttention(nn.Module):
                 for j in range(x.shape[-2]):
                     e_type = self.get_relation_type_index(types[b, i],
                                                           types[b, j])
-                    w_att_i_list.append(self.relation_att[e_type].unsqueeze(0))
-                    w_msg_i_list.append(self.relation_msg[e_type].unsqueeze(0))
+                    w_att_i_list.append(relation_att[e_type].unsqueeze(0))
+                    w_msg_i_list.append(relation_msg[e_type].unsqueeze(0))
                 w_att_list.append(torch.cat(w_att_i_list, dim=0).unsqueeze(0))
                 w_msg_list.append(torch.cat(w_msg_i_list, dim=0).unsqueeze(0))
 
@@ -127,20 +141,29 @@ class HGTCavAttention(nn.Module):
         # q: (B, M, H, W, L, C)
         q, k, v = map(lambda t: rearrange(t, 'b h w l (m c) -> b m h w l c',
                                           m=self.heads), (qkv))
+        
         # attention, (B, M, H, W, L, L)
+        q = self.attentionMapQuantizer(q)
+        w_att = self.attentionMapQuantizer(w_att)
+        k = self.attentionMapQuantizer(k)
         att_map = torch.einsum(
             'b m h w i p, b m i j p q, bm h w j q -> b m h w i j',
             [q, w_att, k]) * self.scale
+        att_map = self.attentionMapQuantizer(att_map)
+
         # add mask
         att_map = att_map.masked_fill(mask == 0, -float('inf'))
         # softmax
         att_map = self.attend(att_map)
 
         # out:(B, M, H, W, L, C_head)
-        v_msg = torch.einsum('b m i j p c, b m h w j p -> b m h w i j c',
-                             w_msg, v)
-        out = torch.einsum('b m h w i j, b m h w i j c -> b m h w i c',
-                           att_map, v_msg)
+        w_msg = self.outQuantizer(w_msg)
+        v = self.outQuantizer(v)
+        att_map = self.outQuantizer(att_map)
+        v_msg = self.outQuantizer(torch.einsum('b m i j p c, b m h w j p -> b m h w i j c',
+                             w_msg, v))
+        out = self.outQuantizer(torch.einsum('b m h w i j, b m h w i j c -> b m h w i c',
+                           att_map, v_msg))
 
         out = rearrange(out, 'b m h w l c -> b h w l (m c)',
                         m=self.heads)

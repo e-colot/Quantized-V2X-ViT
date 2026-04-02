@@ -66,8 +66,9 @@ class RelTemporalEncoding(nn.Module):
     def forward(self, x, t):
         # When t has unit of 50ms, rte_ratio=1.
         # So we can train on 100ms but test on 50ms
-        return self.output_quantizer(x + self.lin(self.emb(t * self.RTE_ratio))).unsqueeze(
-            0).unsqueeze(1)
+        return self.output_quantizer(
+            x + self.lin(self.emb(t * self.RTE_ratio)).unsqueeze(0).unsqueeze(1)
+        )
 
 
 class RTE(nn.Module):
@@ -91,15 +92,21 @@ class RTE(nn.Module):
 
 
 class V2XFusionBlock(nn.Module):
-    def __init__(self, num_blocks, cav_att_config, pwindow_config):
+    def __init__(self, num_blocks, cav_att_config, pwindow_config, quantize_cfg):
         super().__init__()
         # first multi-agent attention and then multi-window attention
         self.layers = nn.ModuleList([])
         self.num_blocks = num_blocks
 
+        # cav_att_config['use_hetero'] = true for my specific model
+        # so no CavAttention module is instantiated
+        if not cav_att_config['use_hetero']:
+            print('Warning: CavAttention module not quantized')
+
         for _ in range(num_blocks):
             att = HGTCavAttention(cav_att_config['dim'],
                                   heads=cav_att_config['heads'],
+                                  quantize_cfg=quantize_cfg['hmsa'],
                                   dim_head=cav_att_config['dim_head'],
                                   dropout=cav_att_config['dropout']) if \
                 cav_att_config['use_hetero'] else \
@@ -158,7 +165,8 @@ class V2XTEncoder(nn.Module):
             self.rte = RTE(cav_att_config['dim'], quantize_cfg=quantize_cfg['RTE'], RTE_ratio=self.RTE_ratio)
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                V2XFusionBlock(num_blocks, cav_att_config, pwindow_att_config),
+                V2XFusionBlock(num_blocks, cav_att_config, pwindow_att_config, 
+                               quantize_cfg=quantize_cfg['V2XFusionBlock']),
                 PreNorm(cav_att_config['dim'],
                         FeedForward(cav_att_config['dim'], mlp_dim,
                                     dropout=dropout))
