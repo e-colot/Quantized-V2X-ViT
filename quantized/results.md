@@ -7,11 +7,11 @@
 
 Time taken (RTX 5060Ti): 14:47
 
-### Full fp8 - up to checkpoint 0.4
+### Full fp8 - up to checkpoint 0.7
 | Metric | Value | Baseline Comparison |
 |--------|-------| ------------------- |
-| AP @ IoU 0.3 | 0.8816 | -1.21% |
-| AP @ IoU 0.5 | 0.8304 | -1.26% |
-| AP @ IoU 0.7 | 0.6000 | -2.65% |
+| AP @ IoU 0.3 | 0.8749 | -1.96% |
+| AP @ IoU 0.5 | 0.8233 | -2.10% |
+| AP @ IoU 0.7 | 0.5941 | -3.62% |
 
-Time taken (RTX 5060Ti): 39:49
+Time taken (RTX 5060Ti): 1:35:33
