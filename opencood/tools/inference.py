@@ -44,9 +44,19 @@ def test_parser():
     opt = parser.parse_args()
     return opt
 
+class Arguments:
+    model_dir = 'opencood/v2x-vit'
+    fusion_method = 'intermediate'
+    show_vis = False
+    show_sequence = False
+    save_vis = False
+    save_npy = False
+    global_sort_detections = False
+
 
 def main():
-    opt = test_parser()
+    # opt = test_parser()
+    opt = Arguments()
     assert opt.fusion_method in ['late', 'early', 'intermediate']
     assert not (opt.show_vis and opt.show_sequence), 'you can only visualize ' \
                                                     'the results in single ' \
