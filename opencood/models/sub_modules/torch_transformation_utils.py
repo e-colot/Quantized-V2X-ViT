@@ -154,27 +154,8 @@ def _torch_inverse_cast(input):
     dtype = input.dtype
     if dtype not in (torch.float32, torch.float64):
         dtype = torch.float32
-
-    matrix = input.to(dtype)
-    a = matrix[..., 0, 0]
-    b = matrix[..., 0, 1]
-    c = matrix[..., 0, 2]
-    d = matrix[..., 1, 0]
-    e = matrix[..., 1, 1]
-    f = matrix[..., 1, 2]
-    g = matrix[..., 2, 0]
-    h = matrix[..., 2, 1]
-    i = matrix[..., 2, 2]
-
-    det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
-
-    inv = torch.stack([
-        torch.stack([e * i - f * h, c * h - b * i, b * f - c * e], dim=-1),
-        torch.stack([f * g - d * i, a * i - c * g, c * d - a * f], dim=-1),
-        torch.stack([d * h - e * g, b * g - a * h, a * e - b * d], dim=-1),
-    ], dim=-2)
-    inv = inv / det.unsqueeze(-1).unsqueeze(-1)
-    return inv.to(input.dtype)
+    out = torch.inverse(input.to(dtype)).to(input.dtype)
+    return out
 
 
 def normal_transform_pixel(

@@ -28,30 +28,6 @@ def regroup(dense_feature, record_len, max_len):
     regroup_feature : torch.Tensor
         B, L, C, H, W
     """
-    if record_len.shape[0] == 1:
-        feature_shape = dense_feature.shape
-        padding_len = max_len - feature_shape[0]
-
-        padding_tensor = dense_feature.new_zeros(padding_len,
-                                                 feature_shape[1],
-                                                 feature_shape[2],
-                                                 feature_shape[3])
-        split_feature = torch.cat([dense_feature, padding_tensor], dim=0)
-        regroup_features = split_feature.view(1,
-                                              -1,
-                                              feature_shape[2],
-                                              feature_shape[3])
-        regroup_features = rearrange(regroup_features,
-                                     'b (l c) h w -> b l c h w',
-                                     l=max_len)
-        mask = torch.cat([
-            torch.ones(feature_shape[0], device=dense_feature.device,
-                       dtype=torch.long),
-            torch.zeros(padding_len, device=dense_feature.device,
-                        dtype=torch.long)
-        ], dim=0).unsqueeze(0)
-        return regroup_features, mask
-
     cum_sum_len = list(np.cumsum(torch_tensor_to_numpy(record_len)))
     split_features = torch.tensor_split(dense_feature,
                                         cum_sum_len[:-1])
