@@ -45,19 +45,6 @@ def test_parser():
     return opt if opt.model_dir else Arguments()
 
 class Arguments:
-<<<<<<< HEAD
-<<<<<<< HEAD
-    model_dir = 'opencood/v2x-vit'
-    fusion_method = 'intermediate'
-    show_vis = False
-    show_sequence = False
-    save_vis = False
-    save_npy = False
-    global_sort_detections = False
-
-=======
-=======
->>>>>>> 03709eb (updated default args)
     def __init__(self):
         print('Default parameters used')
         self.model_dir = 'opencood/v2x-vit'
@@ -67,10 +54,6 @@ class Arguments:
         self.save_vis = False
         self.save_npy = False
         self.global_sort_detections = False
-<<<<<<< HEAD
->>>>>>> 45e9932 (added default args for inference)
-=======
->>>>>>> 03709eb (updated default args)
 
 def main():
     # opt = test_parser()
