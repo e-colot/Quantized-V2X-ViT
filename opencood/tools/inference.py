@@ -22,9 +22,9 @@ import matplotlib.pyplot as plt
 
 def test_parser():
     parser = argparse.ArgumentParser(description="synthetic data generation")
-    parser.add_argument('--model_dir', type=str, required=True,
+    parser.add_argument('--model_dir', type=str,
                         help='Continued training path')
-    parser.add_argument('--fusion_method', required=True, type=str,
+    parser.add_argument('--fusion_method', type=str,
                         default='late',
                         help='late, early or intermediate')
     parser.add_argument('--show_vis', action='store_true',
@@ -42,8 +42,18 @@ def test_parser():
                              'If set to True, it is the mainstream AP computing method,'
                              'but would increase the tolerance for FP (False Positives).')
     opt = parser.parse_args()
-    return opt
+    return opt if opt.model_dir else Arguments()
 
+class Arguments:
+    def __init__(self):
+        print('Default parameters used')
+        self.model_dir = 'opencood/v2x-vit'
+        self.fusion_method = 'intermediate'
+        self.show_vis = False
+        self.show_sequence = False
+        self.save_vis = False
+        self.save_npy = False
+        self.global_sort_detections = False
 
 def main():
     opt = test_parser()
