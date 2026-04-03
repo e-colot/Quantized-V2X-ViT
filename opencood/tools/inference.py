@@ -45,7 +45,6 @@ def test_parser():
     return opt if opt.model_dir else Arguments()
 
 class Arguments:
-<<<<<<< HEAD
     def __init__(self):
         print('Default parameters used')
         self.model_dir = 'opencood/v2x-vit'
@@ -55,16 +54,6 @@ class Arguments:
         self.save_vis = False
         self.save_npy = False
         self.global_sort_detections = False
-=======
-    model_dir = 'opencood/v2x-vit'
-    fusion_method = 'intermediate'
-    show_vis = False
-    show_sequence = False
-    save_vis = False
-    save_npy = False
-    global_sort_detections = False
-
->>>>>>> origin/TensorRT-implementation
 
 def main():
     # opt = test_parser()
