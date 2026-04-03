@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from einops import rearrange
 
@@ -38,74 +39,39 @@ class HGTCavAttention(nn.Module):
     def to_qkv(self, x, types):
         # x: (B,H,W,L,C)
         # types: (B,L)
-        q_batch = []
-        k_batch = []
-        v_batch = []
-
-        for b in range(x.shape[0]):
-            q_list = []
-            k_list = []
-            v_list = []
-
-            for i in range(x.shape[-2]):
-                # (H,W,1,C)
-                q_list.append(
-                    self.q_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-                k_list.append(
-                    self.k_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-                v_list.append(
-                    self.v_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-            # (1,H,W,L,C)
-            q_batch.append(torch.cat(q_list, dim=2).unsqueeze(0))
-            k_batch.append(torch.cat(k_list, dim=2).unsqueeze(0))
-            v_batch.append(torch.cat(v_list, dim=2).unsqueeze(0))
-        # (B,H,W,L,C)
-        q = torch.cat(q_batch, dim=0)
-        k = torch.cat(k_batch, dim=0)
-        v = torch.cat(v_batch, dim=0)
+        q = self._project_by_type(x, types, self.q_linears)
+        k = self._project_by_type(x, types, self.k_linears)
+        v = self._project_by_type(x, types, self.v_linears)
         return q, k, v
+
+    def _project_by_type(self, x, types, layers):
+        layer_weights = torch.stack([layer.weight for layer in layers], dim=0)
+        layer_biases = torch.stack([layer.bias for layer in layers], dim=0)
+        projected = torch.einsum('bhwlc,toc->bhwlto', x, layer_weights)
+        projected = projected + layer_biases.view(1, 1, 1, 1, -1,
+                                                  layer_biases.shape[-1])
+        type_mask = F.one_hot(types.to(torch.long),
+                              num_classes=self.num_types).to(projected.dtype)
+        type_mask = type_mask.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+        return (projected * type_mask).sum(dim=4)
 
     def get_relation_type_index(self, type1, type2):
         return type1 * self.num_types + type2
 
     def get_hetero_edge_weights(self, x, types):
-        w_att_batch = []
-        w_msg_batch = []
-
-        for b in range(x.shape[0]):
-            w_att_list = []
-            w_msg_list = []
-
-            for i in range(x.shape[-2]):
-                w_att_i_list = []
-                w_msg_i_list = []
-
-                for j in range(x.shape[-2]):
-                    e_type = self.get_relation_type_index(types[b, i],
-                                                          types[b, j])
-                    w_att_i_list.append(self.relation_att[e_type].unsqueeze(0))
-                    w_msg_i_list.append(self.relation_msg[e_type].unsqueeze(0))
-                w_att_list.append(torch.cat(w_att_i_list, dim=0).unsqueeze(0))
-                w_msg_list.append(torch.cat(w_msg_i_list, dim=0).unsqueeze(0))
-
-            w_att_batch.append(torch.cat(w_att_list, dim=0).unsqueeze(0))
-            w_msg_batch.append(torch.cat(w_msg_list, dim=0).unsqueeze(0))
-
-        # (B,M,L,L,C_head,C_head)
-        w_att = torch.cat(w_att_batch, dim=0).permute(0, 3, 1, 2, 4, 5)
-        w_msg = torch.cat(w_msg_batch, dim=0).permute(0, 3, 1, 2, 4, 5)
+        relation_type = self.get_relation_type_index(types[:, :, None],
+                                                     types[:, None, :])
+        relation_mask = F.one_hot(relation_type.to(torch.long),
+                                  num_classes=self.relation_att.shape[0])
+        relation_mask = relation_mask.to(x.dtype)
+        w_att = torch.einsum('bijr,rhde->bhijde', relation_mask,
+                             self.relation_att)
+        w_msg = torch.einsum('bijr,rhde->bhijde', relation_mask,
+                             self.relation_msg)
         return w_att, w_msg
 
     def to_out(self, x, types):
-        out_batch = []
-        for b in range(x.shape[0]):
-            out_list = []
-            for i in range(x.shape[-2]):
-                out_list.append(
-                    self.a_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-            out_batch.append(torch.cat(out_list, dim=2).unsqueeze(0))
-        out = torch.cat(out_batch, dim=0)
-        return out
+        return self._project_by_type(x, types, self.a_linears)
 
     def forward(self, x, mask, prior_encoding):
         # x: (B, L, H, W, C) -> (B, H, W, L, C)
