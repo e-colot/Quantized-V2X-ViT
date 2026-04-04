@@ -56,8 +56,7 @@ class Arguments:
         self.global_sort_detections = False
 
 def main():
-    # opt = test_parser()
-    opt = Arguments()
+    opt = test_parser()
     assert opt.fusion_method in ['late', 'early', 'intermediate']
     assert not (opt.show_vis and opt.show_sequence), 'you can only visualize ' \
                                                     'the results in single ' \
