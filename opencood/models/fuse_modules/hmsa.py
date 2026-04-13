@@ -3,6 +3,23 @@ from torch import nn
 
 from einops import rearrange
 
+class PreNormedHGTCavAttention(nn.Module):
+    """
+    Wrapper for HGTCavAttention that adds a prenorm step.
+    The dimension of the prenorm is the same as the one given to HGTCavAttention.
+    """
+    def __init__(self, dim, heads, num_types=2,
+                 num_relations=4, dim_head=64, dropout=0.1):
+        super().__init__()
+        self.prenorm = nn.LayerNorm(dim)
+        self.hgtCav = HGTCavAttention(dim, heads, num_types=num_types, num_relations=num_relations,
+                                      dim_head=dim_head, dropout=dropout)
+        
+    def forward(self, x, mask, prior_encoding):
+        x = self.prenorm(x)
+        x = self.hgtCav(x, mask, prior_encoding)
+        return x
+
 
 class HGTCavAttention(nn.Module):
     def __init__(self, dim, heads, num_types=2,
@@ -38,32 +55,28 @@ class HGTCavAttention(nn.Module):
     def to_qkv(self, x, types):
         # x: (B,H,W,L,C)
         # types: (B,L)
-        q_batch = []
-        k_batch = []
-        v_batch = []
+        B, H, W, L, C = x.shape
 
-        for b in range(x.shape[0]):
-            q_list = []
-            k_list = []
-            v_list = []
+        all_q = torch.stack([linear(x) for linear in self.q_linears]) # (NumTypes, B, H, W, L, out_C)
+        all_k = torch.stack([linear(x) for linear in self.k_linears])
+        all_v = torch.stack([linear(x) for linear in self.v_linears])
 
-            for i in range(x.shape[-2]):
-                # (H,W,1,C)
-                q_list.append(
-                    self.q_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-                k_list.append(
-                    self.k_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-                v_list.append(
-                    self.v_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-            # (1,H,W,L,C)
-            q_batch.append(torch.cat(q_list, dim=2).unsqueeze(0))
-            k_batch.append(torch.cat(k_list, dim=2).unsqueeze(0))
-            v_batch.append(torch.cat(v_list, dim=2).unsqueeze(0))
-        # (B,H,W,L,C)
-        q = torch.cat(q_batch, dim=0)
-        k = torch.cat(k_batch, dim=0)
-        v = torch.cat(v_batch, dim=0)
-        return q, k, v
+        num_types = len(self.q_linears)
+        out_q = torch.zeros_like(all_q[0])
+        out_k = torch.zeros_like(all_k[0])
+        out_v = torch.zeros_like(all_v[0])
+
+        for t_idx in range(num_types):
+            # Create a mask where types match the current linear layer index
+            # mask shape: (B, 1, 1, L, 1)
+            mask = (types == t_idx).view(B, 1, 1, L, 1)
+            
+            # Add the results for this type to the output
+            out_q += all_q[t_idx] * mask
+            out_k += all_k[t_idx] * mask
+            out_v += all_v[t_idx] * mask
+
+        return out_q, out_k, out_v
 
     def get_relation_type_index(self, type1, type2):
         return type1 * self.num_types + type2
@@ -125,8 +138,12 @@ class HGTCavAttention(nn.Module):
         w_att, w_msg = self.get_hetero_edge_weights(x, types)
 
         # q: (B, M, H, W, L, C)
-        q, k, v = map(lambda t: rearrange(t, 'b h w l (m c) -> b m h w l c',
-                                          m=self.heads), (qkv))
+        # q, k, v = map(lambda t: rearrange(t, 'b h w l (m c) -> b m h w l c',
+        #                                   m=self.heads), (qkv))
+        q_in, k_in, v_in = qkv
+        q = rearrange(q_in, 'b h w l (m c) -> b m h w l c', m=self.heads)
+        k = rearrange(k_in, 'b h w l (m c) -> b m h w l c', m=self.heads)
+        v = rearrange(v_in, 'b h w l (m c) -> b m h w l c', m=self.heads)
         # attention, (B, M, H, W, L, L)
         att_map = torch.einsum(
             'b m h w i p, b m i j p q, bm h w j q -> b m h w i j',

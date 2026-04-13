@@ -80,6 +80,24 @@ class BaseWindowAttention(nn.Module):
         return out
 
 
+class PreNormedPyramidWindowAttention(nn.Module):
+    """
+    Wrapper for PyramidWindowAttention that adds a prenorm step.
+    """
+    def __init__(self, prenorm_dim, dim, heads, dim_heads, drop_out, window_size,
+                 relative_pos_embedding, fuse_method='naive'):
+        super().__init__()
+
+        self.prenorm = nn.LayerNorm(prenorm_dim)
+        self.pwin = PyramidWindowAttention(dim, heads, dim_heads, drop_out, window_size,
+                                           relative_pos_embedding, fuse_method=fuse_method)
+        
+    def forward(self, x):
+        x = self.prenorm(x)
+        x = self.pwin(x)
+        return x
+
+
 class PyramidWindowAttention(nn.Module):
     def __init__(self, dim, heads, dim_heads, drop_out, window_size,
                  relative_pos_embedding, fuse_method='naive'):

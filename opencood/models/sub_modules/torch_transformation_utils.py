@@ -476,17 +476,21 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tup
     # tensorRT struggles with meshgrid
     # grid_y, grid_x = torch.meshgrid(ys, xs, indexing='ij')
     # Use explicit broadcasting shapes:
-    grid_y = ys.view(-1, 1)  # Shape: (H_out, 1)
-    grid_x = xs.view(1, -1)  # Shape: (1, W_out)
-    # expand to 2D grids
-    grid_y = grid_y.expand(H_out, W_out)
-    grid_x = grid_x.expand(H_out, W_out)
+    grid_y = ys.view(-1, 1)  # (H_out, 1)
+    grid_x = xs.view(1, -1)  # (1, W_out)
 
-    ones = torch.ones_like(grid_x)
-    base_grid = torch.stack((grid_x, grid_y, ones), dim=-1)
-    base_grid = base_grid.unsqueeze(0).expand(B, -1, -1, -1)
 
-    norm_grid = torch.einsum('bij,bhwj->bhwi', theta, base_grid)
+    ones = torch.ones(H_out, W_out, device=device, dtype=grid_dtype)
+    base_grid = torch.stack((
+        grid_x.expand(H_out, W_out).contiguous(),
+        grid_y.expand(H_out, W_out).contiguous(),
+        ones), dim=-1)  # (H_out, W_out, 3)
+
+    flat_grid = base_grid.reshape(H_out * W_out, 3)           # (H*W, 3)
+    flat_grid = flat_grid.unsqueeze(0).expand(B, -1, -1).contiguous()  # (B, H*W, 3)
+    norm_grid = torch.bmm(flat_grid, theta.transpose(1, 2))   # (B, H*W, 2)
+    norm_grid = norm_grid.reshape(B, H_out, W_out, 2)         # (B, H_out, W_out, 2)
+
     x = norm_grid[..., 0]
     y = norm_grid[..., 1]
 

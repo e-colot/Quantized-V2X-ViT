@@ -17,14 +17,29 @@ class PreNormResidual(nn.Module):
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
+        # raise NotImplemented('discarded wrapper for tensorrt deployment. Implement a function-specific wrapper to avoid **kwargs')
         self.norm = nn.LayerNorm(dim)
         self.fn = fn
-        # raise NotImplemented
-        # discarded wrapper for tensorrt deployment
 
     def forward(self, x, **kwargs):
         return self.fn(self.norm(x), **kwargs)
 
+
+class PreNormedFeedForward(nn.Module):
+    """
+    Wrapper for FeedForward that adds a prenorm step.
+    The dimension of the prenorm is the same as the one given to FeedForward.
+    """
+    def __init__(self, dim, hidden_dim, dropout=0.):
+        super().__init__()
+        self.prenorm = nn.LayerNorm(dim)
+        self.ff = FeedForward(dim, hidden_dim, dropout=dropout)
+
+    def forward(self, x):
+        x = self.prenorm(x)
+        x = self.ff(x)
+        return x
+    
 
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout=0.):
@@ -39,6 +54,22 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class PreNormedCavAttention(nn.Module):
+    """
+    Wrapper for Vanilla CAV attention that adds a prenorm step.
+    The dimension of the prenorm is the same as the one given to CavAttention.
+    """
+    def __init__(self, dim, heads, dim_head=64, dropout=0.1):
+        super().__init__()
+        self.prenorm = nn.LayerNorm(dim)
+        self.att = CavAttention(dim, heads, dim_head=dim_head, dropout=dropout)
+
+    def forward(self, x, mask):
+        x = self.prenorm(x)
+        x = self.att(x, mask)
+        return x
 
 
 class CavAttention(nn.Module):
@@ -103,22 +134,18 @@ class BaseEncoder(nn.Module):
                             dim_head=dim_head,
                             dropout=dropout)),
                 PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))]))
-            # self.layers.append(nn.ModuleList([
-            #     nn.LayerNorm(dim), 
-            #     CavAttention(dim,
-            #                 heads=heads,
-            #                 dim_head=dim_head,
-            #                 dropout=dropout),
-            #     nn.LayerNorm(dim), 
-            #     FeedForward(dim, mlp_dim, dropout=dropout)]))
+        # for _ in range(depth):
+        #     self.layers.append(nn.ModuleList([
+        #         PreNormedCavAttention(dim,
+        #                     heads=heads,
+        #                     dim_head=dim_head,
+        #                     dropout=dropout),
+        #         PreNormedFeedForward(dim, mlp_dim, dropout=dropout)]))
 
     def forward(self, x, mask):
         for attn, ff in self.layers:
             x = attn(x, mask=mask) + x
             x = ff(x) + x
-        # for prenorm1, attn, prenorm2, ff in self.layers:
-        #     x = attn(prenorm1(x), mask=mask) + x
-        #     x = ff(prenorm2(x)) + x
         return x
 
 
