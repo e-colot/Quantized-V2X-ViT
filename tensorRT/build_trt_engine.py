@@ -75,24 +75,6 @@ class TRTInputAdapter(torch.nn.Module):
         return output_dict['psm'], output_dict['rm']
 
 
-def _build_example_inputs(opt, device):
-    voxels = opt.opt_num_voxels
-    return (
-        torch.randn(
-            voxels,
-            opt.max_points_per_voxel,
-            opt.num_point_features,
-            dtype=torch.float32,
-            device=device,
-        ),
-        torch.zeros(voxels, 4, dtype=torch.int32, device=device),
-        torch.ones(voxels, dtype=torch.int32, device=device),
-        torch.ones(1, dtype=torch.int32, device=device),
-        torch.zeros(1, opt.max_cavs, 3, dtype=torch.float32, device=device),
-        torch.eye(4, dtype=torch.float32, device=device).view(1, 1, 4, 4).repeat(1, opt.max_cavs, 1, 1),
-    )
-
-
 def _build_trt_inputs(opt, torch_tensorrt):
     return [
         torch_tensorrt.Input(
@@ -130,17 +112,16 @@ def _try_script_module(module, module_name: str) -> Optional[torch.jit.ScriptMod
         return None
 
 
-def _prepare_torchscript_module(adapter, example_inputs, opt):
+def _prepare_torchscript_module(adapter, opt):
     if opt.try_script_first:
         scripted_adapter = _try_script_module(adapter, 'adapter')
         if scripted_adapter is not None:
             return scripted_adapter
 
-    print('Falling back to torch.jit.trace for adapter...')
-    with torch.no_grad():
-        traced = torch.jit.trace(adapter, example_inputs, strict=False)
-        traced = torch.jit.freeze(traced)
-    return traced
+    raise RuntimeError(
+        'TorchScript scripting failed for adapter and trace fallback is disabled. '
+        'Please make the model/adapter scriptable to continue.'
+    )
 
 
 def main():
@@ -177,8 +158,7 @@ def main():
 
     print('Preparing TorchScript adapter')
     adapter = TRTInputAdapter(model).to(device).eval()
-    example_inputs = _build_example_inputs(opt, device)
-    scripted = _prepare_torchscript_module(adapter, example_inputs, opt)
+    scripted = _prepare_torchscript_module(adapter, opt)
 
     enabled_precisions = {torch.float16} if opt.precision == 'fp16' else {torch.float32}
     trt_inputs = _build_trt_inputs(opt, torch_tensorrt)
