@@ -1,8 +1,6 @@
 import torch
 from torch import nn
 
-from einops import rearrange
-
 
 class PreNormResidual(nn.Module):
     def __init__(self, dim, fn):
@@ -93,33 +91,60 @@ class CavAttention(nn.Module):
 
     def forward(self, x, mask, prior_encoding):
         # x: (B, L, H, W, C) -> (B, H, W, L, C)
-        # mask: (B, L)
-        x = x.permute(0, 2, 3, 1, 4)
-        # mask: (B, 1, H, W, L, 1)
-        mask = mask.unsqueeze(1)
+        B, L, H, W, C = x.shape
+        M = self.heads
+        D = C // M  # Head dimension
+        
+        # Initial permute
+        x = x.permute(0, 2, 3, 1, 4).contiguous()
+        
+        # mask adjustment: (B, L) -> (B, 1, 1, 1, 1, L) 
+        # Needs to align with att_map: (B, M, H, W, L, L)
+        # We broadcast across the query dimension (i) to mask the keys (j)
+        mask = mask.view(B, 1, 1, 1, 1, L)
 
-        # qkv: [(B, H, W, L, C_inner) *3]
+        # qkv: (B, H, W, L, 3*C) -> 3 tensors of (B, H, W, L, C)
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        # q: (B, M, H, W, L, C)
-        q, k, v = map(lambda t: rearrange(t, 'b h w l (m c) -> b m h w l c',
-                                          m=self.heads), qkv)
+        q_in, k_in, v_in = qkv
 
-        # attention, (B, M, H, W, L, L)
-        att_map = torch.einsum('b m h w i c, b m h w j c -> b m h w i j',
-                               q, k) * self.scale
-        # add mask
-        att_map = att_map.masked_fill(mask == 0, -float('inf'))
-        # softmax
+        # 1. Replace map(lambda rearrange...): Split heads
+        # b h w l (m c) -> b m h w l c
+        def split_heads(t):
+            t = t.view(B, H, W, L, M, D)
+            return t.permute(0, 4, 1, 2, 3, 5).contiguous()
+
+        q = split_heads(q_in)
+        k = split_heads(k_in)
+        v = split_heads(v_in)
+
+        # 2. Replace einsum with matmul for Attention Score
+        # (B, M, H, W, L, D) @ (B, M, H, W, D, L) -> (B, M, H, W, L, L)
+        att_map = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+
+        # 3. Add mask (TensorRT handles masked_fill well)
+        att_map = att_map.masked_fill(mask == 0, -1e9) # Use large neg number instead of inf
+        
+        # softmax (attend)
         att_map = self.attend(att_map)
 
-        # out:(B, M, H, W, L, C_head)
-        out = torch.einsum('b m h w i j, b m h w j c -> b m h w i c', att_map,
-                           v)
-        out = rearrange(out, 'b m h w l c -> b h w l (m c)',
-                        m=self.heads)
-        out = self.to_out(out)
-        # (B L H W C)
-        out = out.permute(0, 3, 1, 2, 4)
+        # 4. Replace einsum with matmul for Value aggregation
+        # (B, M, H, W, L, L) @ (B, M, H, W, L, D) -> (B, M, H, W, L, D)
+        out = torch.matmul(att_map, v)
+
+        # 5. Replace rearrange: Merge heads
+        # b m h w l c -> b h w l (m c)
+        out = out.permute(0, 2, 3, 4, 1, 5).contiguous()
+        out = out.view(B, H, W, L, C)
+
+        # 6. Final projections and permute back
+        out = self.to_out(out) # (B, H, W, L, C)
+        
+        # (B, H, W, L, C) -> (B, L, H, W, C)
+        # Your original code used .permute(0, 3, 1, 2, 4)
+        # Let's verify: 0:B, 1:H, 2:W, 3:L, 4:C
+        # Result: B, L, H, W, C
+        out = out.permute(0, 3, 1, 2, 4).contiguous()
+        
         return out
 
 

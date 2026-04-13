@@ -1,8 +1,6 @@
 import torch
 from torch import nn
 
-from einops import rearrange
-
 class PreNormedHGTCavAttention(nn.Module):
     """
     Wrapper for HGTCavAttention that adds a prenorm step.
@@ -122,47 +120,70 @@ class HGTCavAttention(nn.Module):
 
     def forward(self, x, mask, prior_encoding):
         # x: (B, L, H, W, C) -> (B, H, W, L, C)
-        # mask: (B, H, W, L, 1)
-        # prior_encoding: (B,L,H,W,3)
-        x = x.permute(0, 2, 3, 1, 4)
-        # mask: (B, 1, H, W, L, 1)
+        B, L, H, W, C = x.shape
+        M = self.heads
+        D = C // M
+
+        # Initial permute - use contiguous for TensorRT stability
+        x = x.permute(0, 2, 3, 1, 4).contiguous()
+        
+        # mask: (B, 1, H, W, L, 1) - aligned for broadcasting
         mask = mask.unsqueeze(1)
-        # (B,L)
-        velocities, dts, types = [itm.squeeze(-1) for itm in
-                                  prior_encoding[:, :, 0, 0, :].split(
-                                      [1, 1, 1], dim=-1)]
-        types = types.to(torch.int)
-        dts = dts.to(torch.int)
+
+        # Handle prior_encoding without list comprehension or split
+        # Unpack velocities, dts, types directly from the last dim
+        pe_slice = prior_encoding[:, :, 0, 0, :]
+        # Using slice indexing is more TensorRT-robust than .split()
+        types = pe_slice[:, :, 2].to(torch.int32) 
+        # (velocities and dts are extracted if needed elsewhere)
+
+        # Heterogeneous projections
         qkv = self.to_qkv(x, types)
-        # (B,M,L,L,C_head,C_head)
+        # w_att: (B, M, L, L, D, D), w_msg: (B, M, L, L, D, D)
         w_att, w_msg = self.get_hetero_edge_weights(x, types)
 
-        # q: (B, M, H, W, L, C)
-        # q, k, v = map(lambda t: rearrange(t, 'b h w l (m c) -> b m h w l c',
-        #                                   m=self.heads), (qkv))
         q_in, k_in, v_in = qkv
-        q = rearrange(q_in, 'b h w l (m c) -> b m h w l c', m=self.heads)
-        k = rearrange(k_in, 'b h w l (m c) -> b m h w l c', m=self.heads)
-        v = rearrange(v_in, 'b h w l (m c) -> b m h w l c', m=self.heads)
-        # attention, (B, M, H, W, L, L)
-        att_map = torch.einsum(
-            'b m h w i p, b m i j p q, bm h w j q -> b m h w i j',
-            [q, w_att, k]) * self.scale
-        # add mask
-        att_map = att_map.masked_fill(mask == 0, -float('inf'))
-        # softmax
+        
+        # Split heads (Manual rearrange)
+        q = q_in.view(B, H, W, L, M, D).permute(0, 4, 1, 2, 3, 5).contiguous()
+        k = k_in.view(B, H, W, L, M, D).permute(0, 4, 1, 2, 3, 5).contiguous()
+        v = v_in.view(B, H, W, L, M, D).permute(0, 4, 1, 2, 3, 5).contiguous()
+
+        # --- HETEROGENEOUS ATTENTION MAP ---
+        # Original: einsum('b m h w i p, b m i j p q, b m h w j q -> b m h w i j', [q, w_att, k])
+        # TensorRT Fix: Break into two steps for better optimization and TRT support
+        
+        # Step 1: Query @ Edge Weight
+        # (B, M, H, W, L_i, D_p) * (B, M, L_i, L_j, D_p, D_q) -> (B, M, H, W, L_i, L_j, D_q)
+        # Note: We use einsum but avoid the list-input syntax.
+        q_w = torch.einsum('bmhwip,bmijpq->bmhwijq', q, w_att)
+        
+        # Step 2: (Query*Weight) @ Key
+        # (B, M, H, W, L_i, L_j, D_q) * (B, M, H, W, L_j, D_q) -> (B, M, H, W, L_i, L_j)
+        att_map = torch.einsum('bmhwijq,bmhwjq->bmhwij', q_w, k) * self.scale
+
+        # Masking: Use a large constant instead of float('inf') for FP16 safety
+        att_map = att_map.masked_fill(mask == 0, -1e9)
         att_map = self.attend(att_map)
 
-        # out:(B, M, H, W, L, C_head)
-        v_msg = torch.einsum('b m i j p c, b m h w j p -> b m h w i j c',
-                             w_msg, v)
-        out = torch.einsum('b m h w i j, b m h w i j c -> b m h w i c',
-                           att_map, v_msg)
+        # --- HETEROGENEOUS MESSAGE PASSING ---
+        # Step 1: Edge Weight @ Value
+        # (B, M, L_i, L_j, D_p, D_c) * (B, M, H, W, L_j, D_p) -> (B, M, H, W, L_i, L_j, D_c)
+        v_msg = torch.einsum('bmijpc,bmhwjp->bmhwijc', w_msg, v)
+        
+        # Step 2: Attention Map @ Weighted Value
+        # (B, M, H, W, L_i, L_j) * (B, M, H, W, L_i, L_j, D_c) -> (B, M, H, W, L_i, D_c)
+        out = torch.einsum('bmhwij,bmhwijc->bmhwic', att_map, v_msg)
 
-        out = rearrange(out, 'b m h w l c -> b h w l (m c)',
-                        m=self.heads)
+        # Merge heads (Manual rearrange)
+        out = out.permute(0, 2, 3, 4, 1, 5).contiguous()
+        out = out.view(B, H, W, L, C)
+        
+        # Heterogeneous output projection
         out = self.to_out(out, types)
         out = self.drop_out(out)
-        # (B L H W C)
-        out = out.permute(0, 3, 1, 2, 4)
+        
+        # Final permute back to (B, L, H, W, C)
+        out = out.permute(0, 3, 1, 2, 4).contiguous()
+        
         return out
