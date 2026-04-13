@@ -220,18 +220,25 @@ def normal_transform_pixel(
         tr_mat : torch.Tensor
             Normalized transform with shape :math:`(1, 3, 3)`.
     """
-    tr_mat = torch.tensor(
-        [[1.0, 0.0, -1.0], [0.0, 1.0, -1.0], [0.0, 0.0, 1.0]], device=device,
-        dtype=dtype)  # 3x3
-
     # prevent divide by zero bugs
-    width_denom = eps if width == 1 else width - 1.0
-    height_denom = eps if height == 1 else height - 1.0
+    # width_denom = eps if width == 1 else width - 1.0
+    # height_denom = eps if height == 1 else height - 1.0
 
-    tr_mat[0, 0] = tr_mat[0, 0] * 2.0 / width_denom
-    tr_mat[1, 1] = tr_mat[1, 1] * 2.0 / height_denom
+    # slight difference, allows to remove conditional statement
+    width_denom = width - 1.0 + eps
+    height_denom = height - 1.0 + eps
 
-    return tr_mat.unsqueeze(0)  # 1x3x3
+    el_0_0 = torch.tensor(2.0/width_denom, device=device, dtype=dtype)
+    el_1_1 = torch.tensor(2.0/height_denom, device=device, dtype=dtype)
+    
+    row0 = torch.stack([el_0_0, torch.tensor(0.0, device=device, dtype=dtype), torch.tensor(-1.0, device=device, dtype=dtype)])
+    row1 = torch.stack([torch.tensor(0.0, device=device, dtype=dtype), el_1_1, torch.tensor(-1.0, device=device, dtype=dtype)])
+    row2 = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=dtype)
+
+    # Stack into a 3x3
+    tr_mat = torch.stack([row0, row1, row2], dim=0)
+
+    return tr_mat.unsqueeze(0)  # unsqueeze to 1x3x3
 
 
 def eye_like(n, B, device, dtype):
@@ -416,17 +423,29 @@ def affine_grid_sample_approx(src, theta, dsize,
         # ys = torch.linspace(-1.0, 1.0, H_out, device=device, dtype=grid_dtype)
         # xs = torch.linspace(-1.0, 1.0, W_out, device=device, dtype=grid_dtype)
         # torch.arrange lies closer to the HW computations
-        if H_out > 1:
-            step_y = 2.0 / (H_out - 1)
-            ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - 1.0
-        else:
-            ys = torch.zeros(1, device=device, dtype=grid_dtype) # Handle edge case
 
-        if W_out > 1:
-            step_x = 2.0 / (W_out - 1)
-            xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - 1.0
-        else:
-            xs = torch.zeros(1, device=device, dtype=grid_dtype)
+        # if H_out > 1:
+        #     step_y = 2.0 / (H_out - 1)
+        #     ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - 1.0
+        # else:
+        #     ys = torch.zeros(1, device=device, dtype=grid_dtype) # Handle edge case
+
+        # if W_out > 1:
+        #     step_x = 2.0 / (W_out - 1)
+        #     xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - 1.0
+        # else:
+        #     xs = torch.zeros(1, device=device, dtype=grid_dtype)
+
+        eps = 1e-14
+
+        denom_y = (H_out - 1.0) + eps
+        step_y = 2.0 / denom_y
+        ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - 1.0
+
+        denom_x = (W_out - 1.0) + eps
+        step_x = 2.0 / denom_x
+        xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - 1.0
+
     else:
         ys = (2.0 * (torch.arange(H_out, device=device, dtype=grid_dtype) + 0.5)
               / H_out - 1.0)

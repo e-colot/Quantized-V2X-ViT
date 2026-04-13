@@ -32,6 +32,11 @@ class Arguments:
 
 
 class TRTInputAdapter(torch.nn.Module):
+    """
+    Adapter for TensorRT conversion that wraps the model to expose only
+    backbone + fusion + head outputs. Post-processing (anchor decoding, NMS, etc.)
+    is kept in Python and will be applied after TensorRT inference.
+    """
     def __init__(self, model):
         super().__init__()
         self.model = model
@@ -45,6 +50,13 @@ class TRTInputAdapter(torch.nn.Module):
         prior_encoding,
         spatial_correction_matrix,
     ):
+        """
+        Forward pass through backbone + fusion + head only.
+        
+        Returns:
+            psm: Classification predictions (raw, pre-post-processing)
+            rm: Regression predictions (raw, pre-post-processing)
+        """
         model_input = {
             'processed_lidar': {
                 'voxel_features': voxel_features,
@@ -55,7 +67,11 @@ class TRTInputAdapter(torch.nn.Module):
             'prior_encoding': prior_encoding,
             'spatial_correction_matrix': spatial_correction_matrix,
         }
+        # Forward through: pillar_vfe -> scatter -> backbone -> fusion -> heads
+        # (no post-processing applied here)
         output_dict = self.model(model_input)
+        # Return only the head outputs (classification and regression)
+        # Post-processing happens in Python after TensorRT inference
         return output_dict['psm'], output_dict['rm']
 
 
@@ -159,7 +175,7 @@ def main():
         else:
             print('Whole-model scripting failed; continuing with eager model.')
 
-    print('Preparing TorchScript adapter...')
+    print('Preparing TorchScript adapter')
     adapter = TRTInputAdapter(model).to(device).eval()
     example_inputs = _build_example_inputs(opt, device)
     scripted = _prepare_torchscript_module(adapter, example_inputs, opt)

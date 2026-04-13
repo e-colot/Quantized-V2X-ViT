@@ -29,26 +29,34 @@ class PFNLayer(nn.Module):
         self.part = 50000
 
     def forward(self, inputs):
-        if inputs.shape[0] > self.part:
-            # nn.Linear performs randomly when batch size is too large
-            num_parts = inputs.shape[0] // self.part
-            part_linear_out = [self.linear(
-                inputs[num_part * self.part:(num_part + 1) * self.part])
-                for num_part in range(num_parts + 1)]
-            x = torch.cat(part_linear_out, dim=0)
-        else:
-            x = self.linear(inputs)
-        torch.backends.cudnn.enabled = False
-        x = self.norm(x.permute(0, 2, 1)).permute(0, 2,
-                                                  1) if self.use_norm else x
-        torch.backends.cudnn.enabled = True
+        # safety checks, removed for tensorrt
+        # if inputs.shape[0] > self.part:
+        #     # nn.Linear performs randomly when batch size is too large
+        #     num_parts = inputs.shape[0] // self.part
+        #     part_linear_out = [self.linear(
+        #         inputs[num_part * self.part:(num_part + 1) * self.part])
+        #         for num_part in range(num_parts + 1)]
+        #     x = torch.cat(part_linear_out, dim=0)
+        # else:
+        #     x = self.linear(inputs)
+
+        x = self.linear(inputs)
+
+        if self.use_norm:
+            # Reshape to (N*L, C) to use BatchNorm1d effectively
+            # TensorRT handles 2D BatchNorm much better
+            B, L, C = x.shape
+            x = x.view(-1, C)
+            x = self.norm(x)
+            x = x.view(B, L, C)
+
         x = F.relu(x)
         x_max = torch.max(x, dim=1, keepdim=True)[0]
 
         if self.last_vfe:
             return x_max
         else:
-            x_repeat = x_max.repeat(1, inputs.shape[1], 1)
+            x_repeat = x_max.expand(-1, inputs.shape[1], -1)
             x_concatenated = torch.cat([x, x_repeat], dim=2)
             return x_concatenated
 
