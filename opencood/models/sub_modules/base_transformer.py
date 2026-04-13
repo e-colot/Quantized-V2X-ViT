@@ -17,7 +17,7 @@ class PreNormResidual(nn.Module):
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
-        # raise NotImplemented('discarded wrapper for tensorrt deployment. Implement a function-specific wrapper to avoid **kwargs')
+        raise NotImplemented('discarded wrapper for tensorrt deployment. Implement a function-specific wrapper to avoid **kwargs')
         self.norm = nn.LayerNorm(dim)
         self.fn = fn
 
@@ -129,11 +129,11 @@ class BaseEncoder(nn.Module):
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                PreNorm(dim, CavAttention(dim,
+                PreNormedCavAttention(dim,
                             heads=heads,
                             dim_head=dim_head,
-                            dropout=dropout)),
-                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))]))
+                            dropout=dropout),
+                PreNormedFeedForward(dim, mlp_dim, dropout=dropout)]))
         # for _ in range(depth):
         #     self.layers.append(nn.ModuleList([
         #         PreNormedCavAttention(dim,

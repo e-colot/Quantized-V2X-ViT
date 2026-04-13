@@ -1,0 +1,31 @@
+version: 2
+
+# Use exact mappings when one old key should become exactly one new key.
+rename_exact: []
+
+rename_substrings: []
+
+# Regex mappings are applied in order.
+# These rules target the old wrapper layout:
+# - old: ...norm..., ...fn...
+# - new: ...prenorm..., ...hgtCav|pwin|ff...
+rename_regex:
+  # Wrapper norm -> prenorm for V2XFusionBlock attention/pwindow modules.
+  - pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.[01])\.norm\.'
+    repl: '\1.prenorm.'
+
+  # Wrapper norm -> prenorm for encoder feed-forward module.
+  - pattern: '(^fusion_net\.encoder\.layers\.\d+\.1)\.norm\.'
+    repl: '\1.prenorm.'
+
+  # HGTCav attention wrapper: fn.* -> hgtCav.*
+  - pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.fn\.'
+    repl: '\1.hgtCav.'
+
+  # PyramidWindow attention wrapper: fn.* -> pwin.*
+  - pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.1)\.fn\.'
+    repl: '\1.pwin.'
+
+  # Feed-forward wrapper: fn.* -> ff.*
+  - pattern: '(^fusion_net\.encoder\.layers\.\d+\.1)\.fn\.'
+    repl: '\1.ff.'

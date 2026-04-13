@@ -88,19 +88,19 @@ class V2XFusionBlock(nn.Module):
         self.num_blocks = num_blocks
 
         for _ in range(num_blocks):
-            att = HGTCavAttention(cav_att_config['dim'],
+            att = PreNormedHGTCavAttention(cav_att_config['dim'],
                                   heads=cav_att_config['heads'],
                                   dim_head=cav_att_config['dim_head'],
                                   dropout=cav_att_config['dropout']) if \
                 cav_att_config['use_hetero'] else \
-                CavAttention(cav_att_config['dim'],
+                PreNormedCavAttention(cav_att_config['dim'],
                              heads=cav_att_config['heads'],
                              dim_head=cav_att_config['dim_head'],
                              dropout=cav_att_config['dropout'])
             self.layers.append(nn.ModuleList([
-                PreNorm(cav_att_config['dim'], att),
-                PreNorm(cav_att_config['dim'], 
-                        PyramidWindowAttention(pwindow_config['dim'],
+                att,
+                PreNormedPyramidWindowAttention(cav_att_config['dim'],
+                                        pwindow_config['dim'],
                                         heads=pwindow_config['heads'],
                                         dim_heads=pwindow_config[
                                             'dim_head'],
@@ -112,34 +112,7 @@ class V2XFusionBlock(nn.Module):
                                         pwindow_config[
                                             'relative_pos_embedding'],
                                         fuse_method=pwindow_config[
-                                            'fusion_method']))]))
-
-        # for _ in range(num_blocks):
-        #     att = PreNormedHGTCavAttention(cav_att_config['dim'],
-        #                           heads=cav_att_config['heads'],
-        #                           dim_head=cav_att_config['dim_head'],
-        #                           dropout=cav_att_config['dropout']) if \
-        #         cav_att_config['use_hetero'] else \
-        #         PreNormedCavAttention(cav_att_config['dim'],
-        #                      heads=cav_att_config['heads'],
-        #                      dim_head=cav_att_config['dim_head'],
-        #                      dropout=cav_att_config['dropout'])
-        #     self.layers.append(nn.ModuleList([
-        #         att,
-        #         PreNormedPyramidWindowAttention(cav_att_config['dim'],
-        #                                 pwindow_config['dim'],
-        #                                 heads=pwindow_config['heads'],
-        #                                 dim_heads=pwindow_config[
-        #                                     'dim_head'],
-        #                                 drop_out=pwindow_config[
-        #                                     'dropout'],
-        #                                 window_size=pwindow_config[
-        #                                     'window_size'],
-        #                                 relative_pos_embedding=
-        #                                 pwindow_config[
-        #                                     'relative_pos_embedding'],
-        #                                 fuse_method=pwindow_config[
-        #                                     'fusion_method'])]))
+                                            'fusion_method'])]))
 
     def forward(self, x, mask, prior_encoding):
         for cav_attn, pwindow_attn in self.layers:
@@ -176,9 +149,8 @@ class V2XTEncoder(nn.Module):
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 V2XFusionBlock(num_blocks, cav_att_config, pwindow_att_config),
-                PreNorm(cav_att_config['dim'],
-                        FeedForward(cav_att_config['dim'], mlp_dim,
-                                    dropout=dropout))]))
+                PreNormedFeedForward(cav_att_config['dim'], mlp_dim,
+                                    dropout=dropout)]))
 
         # for _ in range(depth):
         #     self.layers.append(nn.ModuleList([

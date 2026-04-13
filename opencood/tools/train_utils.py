@@ -57,7 +57,17 @@ def load_saved_model(saved_path, model):
         checkpoint = torch.load(
             model_file,
             map_location='cpu')
-        model.load_state_dict(checkpoint, strict=False)
+        try:
+            from opencood.tools import checkpoint_compat
+            remapped_state, remap_report = checkpoint_compat.remap_checkpoint_for_model(
+                checkpoint_state=checkpoint,
+                model_state=model.state_dict(),
+            )
+            checkpoint_compat.print_remap_report(remap_report)
+            model.load_state_dict(remapped_state, strict=False)
+        except Exception as exc:
+            print(f'[checkpoint_compat] fallback to direct load due to: {exc}')
+            model.load_state_dict(checkpoint, strict=False)
 
         del checkpoint
 

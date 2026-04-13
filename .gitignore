@@ -139,3 +139,4 @@ checkpoints
 DCOS.md
 spconv/
 .vscode/
+.opencood/v2x-vit/eval.yaml
