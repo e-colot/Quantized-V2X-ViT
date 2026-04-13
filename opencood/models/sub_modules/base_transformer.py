@@ -19,6 +19,8 @@ class PreNorm(nn.Module):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.fn = fn
+        # raise NotImplemented
+        # discarded wrapper for tensorrt deployment
 
     def forward(self, x, **kwargs):
         return self.fn(self.norm(x), **kwargs)
@@ -97,16 +99,26 @@ class BaseEncoder(nn.Module):
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 PreNorm(dim, CavAttention(dim,
-                                          heads=heads,
-                                          dim_head=dim_head,
-                                          dropout=dropout)),
-                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
-            ]))
+                            heads=heads,
+                            dim_head=dim_head,
+                            dropout=dropout)),
+                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))]))
+            # self.layers.append(nn.ModuleList([
+            #     nn.LayerNorm(dim), 
+            #     CavAttention(dim,
+            #                 heads=heads,
+            #                 dim_head=dim_head,
+            #                 dropout=dropout),
+            #     nn.LayerNorm(dim), 
+            #     FeedForward(dim, mlp_dim, dropout=dropout)]))
 
     def forward(self, x, mask):
         for attn, ff in self.layers:
             x = attn(x, mask=mask) + x
             x = ff(x) + x
+        # for prenorm1, attn, prenorm2, ff in self.layers:
+        #     x = attn(prenorm1(x), mask=mask) + x
+        #     x = ff(prenorm2(x)) + x
         return x
 
 

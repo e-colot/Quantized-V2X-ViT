@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from typing import Dict
 
 
 class PointPillarScatter(nn.Module):
@@ -9,24 +10,29 @@ class PointPillarScatter(nn.Module):
         self.model_cfg = model_cfg
         self.num_bev_features = self.model_cfg['num_features']
         self.max_cav = self.model_cfg.get('max_cav', None)
-        self.nx, self.ny, self.nz = model_cfg['grid_size']
+        
+        grid_size = model_cfg['grid_size']
+        self.nx = int(grid_size[0])
+        self.ny = int(grid_size[1])
+        self.nz = int(grid_size[2])
+        
         assert self.nz == 1
 
-    def forward(self, batch_dict):
+    def forward(self, batch_dict: Dict[str, torch.Tensor]):
         pillar_features = batch_dict['pillar_features']  # (N, C)
         coords = batch_dict['voxel_coords']  # (N, 4)
         record_len = batch_dict['record_len']
+
+        device = pillar_features.device
+        dtype = pillar_features.dtype
 
         # In export mode we avoid tensor->python scalar conversions by using
         # a fixed upper bound: num_samples_in_batch * max_cav.
         if self.max_cav is not None:
             upper_batch_bound = record_len.shape[0] * self.max_cav
         else:
-            Warning('Taking this branch might block a tensorRT conversion')
-            upper_batch_bound = coords[:, 0].max().int().item() + 1
-
-        device = pillar_features.device
-        dtype = pillar_features.dtype
+            raise NotImplementedError
+            # upper_batch_bound = coords[:, 0].max().int().item() + 1
 
         # Each pillar is mapped to a unique position in a flattened (B * H * W) grid.
         # coords[:, 0] is batch_idx,

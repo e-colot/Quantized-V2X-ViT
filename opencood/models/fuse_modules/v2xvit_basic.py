@@ -6,6 +6,7 @@ from opencood.models.fuse_modules.mswin import *
 from opencood.models.sub_modules.torch_transformation_utils import \
     get_transformation_matrix, warp_affine, get_roi_and_cav_mask, \
     get_discretized_transformation_matrix
+from torch import nn
 
 
 class STTF(nn.Module):
@@ -98,25 +99,45 @@ class V2XFusionBlock(nn.Module):
                              dropout=cav_att_config['dropout'])
             self.layers.append(nn.ModuleList([
                 PreNorm(cav_att_config['dim'], att),
-                PreNorm(cav_att_config['dim'],
+                PreNorm(cav_att_config['dim'], 
                         PyramidWindowAttention(pwindow_config['dim'],
-                                               heads=pwindow_config['heads'],
-                                               dim_heads=pwindow_config[
-                                                   'dim_head'],
-                                               drop_out=pwindow_config[
-                                                   'dropout'],
-                                               window_size=pwindow_config[
-                                                   'window_size'],
-                                               relative_pos_embedding=
-                                               pwindow_config[
-                                                   'relative_pos_embedding'],
-                                               fuse_method=pwindow_config[
-                                                   'fusion_method']))]))
+                                        heads=pwindow_config['heads'],
+                                        dim_heads=pwindow_config[
+                                            'dim_head'],
+                                        drop_out=pwindow_config[
+                                            'dropout'],
+                                        window_size=pwindow_config[
+                                            'window_size'],
+                                        relative_pos_embedding=
+                                        pwindow_config[
+                                            'relative_pos_embedding'],
+                                        fuse_method=pwindow_config[
+                                            'fusion_method']))]))
+            # self.layers.append(nn.ModuleList([
+            #     nn.LayerNorm(cav_att_config['dim']),
+            #     att,
+            #     nn.LayerNorm(cav_att_config['dim']),
+            #     PyramidWindowAttention(pwindow_config['dim'],
+            #                             heads=pwindow_config['heads'],
+            #                             dim_heads=pwindow_config[
+            #                                 'dim_head'],
+            #                             drop_out=pwindow_config[
+            #                                 'dropout'],
+            #                             window_size=pwindow_config[
+            #                                 'window_size'],
+            #                             relative_pos_embedding=
+            #                             pwindow_config[
+            #                                 'relative_pos_embedding'],
+            #                             fuse_method=pwindow_config[
+            #                                 'fusion_method'])]))
 
     def forward(self, x, mask, prior_encoding):
         for cav_attn, pwindow_attn in self.layers:
             x = cav_attn(x, mask=mask, prior_encoding=prior_encoding) + x
             x = pwindow_attn(x) + x
+        # for prenorm1, cav_attn, prenorm2, pwindow_attn in self.layers:
+        #     x = cav_attn(prenorm1(x), mask=mask, prior_encoding=prior_encoding) + x
+        #     x = pwindow_attn(prenorm2(x)) + x
         return x
 
 
@@ -150,8 +171,12 @@ class V2XTEncoder(nn.Module):
                 V2XFusionBlock(num_blocks, cav_att_config, pwindow_att_config),
                 PreNorm(cav_att_config['dim'],
                         FeedForward(cav_att_config['dim'], mlp_dim,
-                                    dropout=dropout))
-            ]))
+                                    dropout=dropout))]))
+            # self.layers.append(nn.ModuleList([
+            #     V2XFusionBlock(num_blocks, cav_att_config, pwindow_att_config),
+            #     nn.LayerNorm(cav_att_config['dim']),
+            #     FeedForward(cav_att_config['dim'], mlp_dim,
+            #                         dropout=dropout)]))
 
     def forward(self, x, mask, spatial_correction_matrix):
 
@@ -175,6 +200,9 @@ class V2XTEncoder(nn.Module):
         for attn, ff in self.layers:
             x = attn(x, mask=com_mask, prior_encoding=prior_encoding)
             x = ff(x) + x
+        # for attn, prenorm, ff in self.layers:
+        #     x = attn(x, mask=com_mask, prior_encoding=prior_encoding)
+        #     x = ff(prenorm(x)) + x
         return x
 
 

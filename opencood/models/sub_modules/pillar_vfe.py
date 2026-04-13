@@ -5,6 +5,7 @@ Pillar VFE, credits to OpenPCDet.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Dict
 
 
 class PFNLayer(nn.Module):
@@ -100,7 +101,7 @@ class PillarVFE(nn.Module):
         return self.num_filters[-1]
 
     @staticmethod
-    def get_paddings_indicator(actual_num, max_num, axis=0):
+    def get_paddings_indicator(actual_num: torch.Tensor, max_num: int, axis: int = 0):
         actual_num = torch.unsqueeze(actual_num, axis + 1)
         max_num_shape = [1] * len(actual_num.shape)
         max_num_shape[axis + 1] = -1
@@ -110,7 +111,7 @@ class PillarVFE(nn.Module):
         paddings_indicator = actual_num.int() > max_num
         return paddings_indicator
 
-    def forward(self, batch_dict):
+    def forward(self, batch_dict: Dict[str, torch.Tensor]):
 
         voxel_features, voxel_num_points, coords = \
             batch_dict['voxel_features'], batch_dict['voxel_num_points'], \

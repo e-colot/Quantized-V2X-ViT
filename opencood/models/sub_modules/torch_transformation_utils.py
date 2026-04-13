@@ -2,6 +2,7 @@
 torch_transformation_utils.py
 """
 import os
+from typing import Tuple
 
 import torch
 import torch.nn.functional as F
@@ -108,8 +109,8 @@ def get_rotated_roi(shape, correction_matrix):
     return roi_mask
 
 
-def get_discretized_transformation_matrix(matrix, discrete_ratio,
-                                          downsample_rate):
+def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: float,
+                                          downsample_rate: int):
     """
     Get disretized transformation matrix.
     Parameters
@@ -119,8 +120,9 @@ def get_discretized_transformation_matrix(matrix, discrete_ratio,
         number.
     discrete_ratio : float
         Discrete ratio.
-    downsample_rate : float/int
+    downsample_rate : int
         downsample_rate
+        Warning: previously supported both float and int
 
     Returns
     -------
@@ -201,7 +203,7 @@ def _torch_inverse_cast(input):
 
 
 def normal_transform_pixel(
-        height, width, device, dtype, eps=1e-14):
+        height: int, width: int, device: torch.device, dtype: torch.dtype, eps: float = 1e-14):
     r"""
     Compute the normalization matrix from image size in pixels to [-1, 1].
     Args:
@@ -241,7 +243,7 @@ def normal_transform_pixel(
     return tr_mat.unsqueeze(0)  # unsqueeze to 1x3x3
 
 
-def eye_like(n, B, device, dtype):
+def eye_like(n: int, B: int, device: torch.device, dtype: torch.dtype):
     r"""
     Return a 2-D tensor with ones on the diagonal and
     zeros elsewhere with the same batch size as the input.
@@ -263,7 +265,7 @@ def eye_like(n, B, device, dtype):
     return identity[None].repeat(B, 1, 1)
 
 
-def normalize_homography(dst_pix_trans_src_pix, dsize_src, dsize_dst=None):
+def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[int, int], dsize_dst: Tuple[int, int] = (-1, -1)):
     r"""
     Normalize a given homography in pixels to [-1, 1].
     Args:
@@ -279,7 +281,7 @@ def normalize_homography(dst_pix_trans_src_pix, dsize_src, dsize_dst=None):
         dst_norm_trans_src_norm : torch.Tensor
             The normalized homography of shape :math:`(B, 3, 3)`.
     """
-    if dsize_dst is None:
+    if dsize_dst == (-1, -1):
         dsize_dst = dsize_src
     # source and destination sizes
     src_h, src_w = dsize_src
@@ -301,7 +303,7 @@ def normalize_homography(dst_pix_trans_src_pix, dsize_src, dsize_dst=None):
     return dst_norm_trans_src_norm
 
 
-def get_rotation_matrix2d(M, dsize):
+def get_rotation_matrix2d(M: torch.Tensor, dsize: Tuple[int, int]):
     r"""
     Return rotation matrix for torch.affine_grid based on transformation matrix.
     Args:
@@ -316,20 +318,20 @@ def get_rotation_matrix2d(M, dsize):
     """
     H, W = dsize
     B = M.shape[0]
-    center = torch.Tensor([W / 2, H / 2]).to(M.dtype).to(M.device).unsqueeze(0)
-    shift_m = eye_like(3, B, M.device, M.dtype)
+    center = torch.tensor([W / 2, H / 2], dtype=M.dtype, device=M.device).unsqueeze(0)
+    shift_m = eye_like(3, B, device=M.device, dtype=M.dtype)
     shift_m[:, :2, 2] = center
 
-    shift_m_inv = eye_like(3, B, M.device, M.dtype)
+    shift_m_inv = eye_like(3, B, device=M.device, dtype=M.dtype)
     shift_m_inv[:, :2, 2] = -center
 
-    rotat_m = eye_like(3, B, M.device, M.dtype)
+    rotat_m = eye_like(3, B, device=M.device, dtype=M.dtype)
     rotat_m[:, :2, :2] = M[:, :2, :2]
     affine_m = shift_m @ rotat_m @ shift_m_inv
     return affine_m[:, :2, :]  # Bx2x3
 
 
-def get_transformation_matrix(M, dsize):
+def get_transformation_matrix(M, dsize: Tuple[int, int]):
     r"""
     Return transformation matrix for torch.affine_grid.
     Args:
@@ -364,7 +366,7 @@ def convert_affinematrix_to_homography(A):
     return H
 
 
-def _reflect_coordinates(coord, low, high):
+def _reflect_coordinates(coord, low: float, high: float):
     """Reflect coordinates into [low, high] using mirror boundary rules."""
     if high <= low:
         return torch.full_like(coord, low)
@@ -401,12 +403,31 @@ def _gather_from_hw(src, x_idx, y_idx):
     return out.view(B, C, H_out, W_out)
 
 
-def affine_grid_sample_approx(src, theta, dsize,
-                              mode='bilinear',
-                              padding_mode='zeros',
-                              align_corners=True):
+def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tuple[int, int],
+                              mode: str = 'bilinear',
+                              padding_mode: str = 'zeros',
+                              align_corners: bool = True):
     """
-    Approximate affine_grid + grid_sample without calling either function.
+    Approximate affine_grid + grid_sample without calling either function to improve TensorRT compatibility.
+    Args:
+        src: torch.Tensor 
+            Input tensor of shape (B, C, H, W) to be transformed.
+        theta: torch.Tensor 
+            Affine transformation matrix of shape (B, 2, 3) containing
+            the 2x3 affine transformation parameters.
+        dsize: Tuple[int, int] 
+            Output spatial dimensions as (H_out, W_out).
+        [mode]: str
+            Interpolation mode. Either 'bilinear' or 'nearest'.
+            Default: 'bilinear'.
+        [padding_mode]: str 
+            Padding mode for out-of-bounds coordinates.
+            Either 'zeros', 'border', or 'reflection'. Default: 'zeros'.
+        [align_corners]: bool 
+            If True, align corners of input and output tensors.
+            Default: True.
+    Returns:
+        torch.Tensor: Transformed tensor of shape (B, C, H_out, W_out).
     """
     if mode not in ('bilinear', 'nearest'):
         raise ValueError(f"Unsupported mode: {mode}")
@@ -555,10 +576,10 @@ def affine_grid_sample_approx(src, theta, dsize,
 
 
 def warp_affine(
-        src, M, dsize,
-        mode='bilinear',
-        padding_mode='zeros',
-        align_corners=True):
+        src:torch.Tensor, M:torch.Tensor, dsize:Tuple[int, int],
+        mode:str='bilinear',
+        padding_mode:str='zeros',
+        align_corners:bool=True):
     r"""
     Transform the src based on transformation matrix M.
     Args:
