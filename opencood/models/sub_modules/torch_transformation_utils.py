@@ -95,11 +95,13 @@ def get_rotated_roi(shape, correction_matrix):
     # To reduce the computation, we only need to calculate the
     # mask for the first channel.
     # (B,L,1,H,W)
-    x = torch.ones((B, L, 1, H, W)).to(correction_matrix.dtype).to(
-        correction_matrix.device)
+    x = torch.ones((B, L, 1, H, W), dtype=correction_matrix.dtype, device=correction_matrix.device)
     # (B*L,1,H,W)
     roi_mask = warp_affine(x.reshape(-1, 1, H, W), correction_matrix,
-                           dsize=(H, W), mode="nearest")
+                           dsize=(H, W), mode="bilinear") # was mode='nearest'
+    # going from 'nearest' to 'bilinear' lost 0.02% AP @ IOU 0.7 (0% elesewhere)
+    # -> acceptable loss
+
     # (B,L,C,H,W)
     roi_mask = torch.repeat_interleave(roi_mask, C, dim=1).reshape(B, L, C, H,
                                                                    W)
@@ -134,6 +136,46 @@ def get_discretized_transformation_matrix(matrix, discrete_ratio,
 
     return matrix.type(dtype=torch.float)
 
+def _3x3_cramer_inverse(input):
+    r"""
+    Helper function to compute the inverse of a Bx3x3 matrix using Cramer's
+    rule. 
+    Args:
+        input : torch.Tensor
+            Tensor to be inversed.
+
+    Returns:
+        out : torch.Tensor
+            Inversed Tensor.
+    """
+    a11, a12, a13 = input[..., 0, 0], input[..., 0, 1], input[..., 0, 2]
+    a21, a22, a23 = input[..., 1, 0], input[..., 1, 1], input[..., 1, 2]
+    a31, a32, a33 = input[..., 2, 0], input[..., 2, 1], input[..., 2, 2]
+
+    det = (a11 * (a22 * a33 - a23 * a32) -
+           a12 * (a21 * a33 - a23 * a31) +
+           a13 * (a21 * a32 - a22 * a31))
+
+    res_row1 = torch.stack([
+        (a22 * a33 - a23 * a32),
+        -(a12 * a33 - a13 * a32),
+        (a12 * a23 - a13 * a22)
+    ], dim=-1)
+    res_row2 = torch.stack([
+        -(a21 * a33 - a23 * a31),
+        (a11 * a33 - a13 * a31),
+        -(a11 * a23 - a13 * a21)
+    ], dim=-1)
+    res_row3 = torch.stack([
+        (a21 * a32 - a22 * a31),
+        -(a11 * a32 - a12 * a31),
+        (a11 * a22 - a12 * a21)
+    ], dim=-1)
+
+    adjugate = torch.stack([res_row1, res_row2, res_row3], dim=-2)
+    
+    return adjugate / (det + 1e-12 * torch.sign(det)).unsqueeze(-1).unsqueeze(-1)
+
 
 def _torch_inverse_cast(input):
     r"""
@@ -151,11 +193,11 @@ def _torch_inverse_cast(input):
             Inversed Tensor.
 
     """
-    dtype = input.dtype
-    if dtype not in (torch.float32, torch.float64):
-        dtype = torch.float32
-    out = torch.inverse(input.to(dtype)).to(input.dtype)
-    return out
+    Warning('Behavior changed, only computes Nx3x3 matrices. If it corresponds ' \
+    'to your usecase, use _3x3_cramer_inverse() instead')
+    infp32 = input.float()
+    outfp32 = _3x3_cramer_inverse(infp32)
+    return outfp32.type_as(input)
 
 
 def normal_transform_pixel(
@@ -242,7 +284,7 @@ def normalize_homography(dst_pix_trans_src_pix, dsize_src, dsize_dst=None):
                                                     dtype).to(
         dst_pix_trans_src_pix)
 
-    src_pix_trans_src_norm = _torch_inverse_cast(src_norm_trans_src_pix)
+    src_pix_trans_src_norm = _3x3_cramer_inverse(src_norm_trans_src_pix)
     dst_norm_trans_dst_pix = normal_transform_pixel(dst_h, dst_w, device,
                                                     dtype).to(
         dst_pix_trans_src_pix)
@@ -315,6 +357,184 @@ def convert_affinematrix_to_homography(A):
     return H
 
 
+def _reflect_coordinates(coord, low, high):
+    """Reflect coordinates into [low, high] using mirror boundary rules."""
+    if high <= low:
+        return torch.full_like(coord, low)
+    span = high - low
+    coord = torch.abs(coord - low)
+    extra = torch.remainder(coord, 2 * span)
+    reflected = torch.where(extra > span, 2 * span - extra, extra)
+    return reflected + low
+
+
+def _gather_from_hw(src, x_idx, y_idx):
+    """Gather src[:, :, y_idx, x_idx] for dense index maps."""
+    B, C, H, W = src.shape
+    H_out, W_out = x_idx.shape[1], x_idx.shape[2]
+    linear_idx = (y_idx * W + x_idx).view(B, 1, -1).expand(-1, C, -1)
+    src_flat = src.reshape(B, C, H * W)
+
+    # tensorRT struggles with:
+    # out = torch.gather(src_flat, 2, linear_idx)
+    # -> split it in different steps
+
+    batch_size, seq_len, _ = src_flat.shape
+    device = src_flat.device
+    
+    # Create 1D indices
+    # We use .view() to place them in the correct dimensions for broadcasting
+    i = torch.arange(batch_size, device=device).view(batch_size, 1, 1) # (B, 1, 1)
+    j = torch.arange(seq_len, device=device).view(1, seq_len, 1)    # (1, L, 1)
+
+    # linear_idx is likely (B, L, K)
+    # When we index with i and j, PyTorch broadcasts them to match linear_idx
+    out = src_flat[i, j, linear_idx]
+
+    return out.view(B, C, H_out, W_out)
+
+
+def affine_grid_sample_approx(src, theta, dsize,
+                              mode='bilinear',
+                              padding_mode='zeros',
+                              align_corners=True):
+    """
+    Approximate affine_grid + grid_sample without calling either function.
+    """
+    if mode not in ('bilinear', 'nearest'):
+        raise ValueError(f"Unsupported mode: {mode}")
+    if padding_mode not in ('zeros', 'border', 'reflection'):
+        raise ValueError(f"Unsupported padding_mode: {padding_mode}")
+
+    B, C, H, W = src.shape
+    H_out, W_out = dsize
+    device = src.device
+    grid_dtype = theta.dtype
+
+    if align_corners:
+        # linspace struggles in the tensorRT conversion (due to its dynamic range)
+        # ys = torch.linspace(-1.0, 1.0, H_out, device=device, dtype=grid_dtype)
+        # xs = torch.linspace(-1.0, 1.0, W_out, device=device, dtype=grid_dtype)
+        # torch.arrange lies closer to the HW computations
+        if H_out > 1:
+            step_y = 2.0 / (H_out - 1)
+            ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - 1.0
+        else:
+            ys = torch.zeros(1, device=device, dtype=grid_dtype) # Handle edge case
+
+        if W_out > 1:
+            step_x = 2.0 / (W_out - 1)
+            xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - 1.0
+        else:
+            xs = torch.zeros(1, device=device, dtype=grid_dtype)
+    else:
+        ys = (2.0 * (torch.arange(H_out, device=device, dtype=grid_dtype) + 0.5)
+              / H_out - 1.0)
+        xs = (2.0 * (torch.arange(W_out, device=device, dtype=grid_dtype) + 0.5)
+              / W_out - 1.0)
+
+    # tensorRT struggles with meshgrid
+    # grid_y, grid_x = torch.meshgrid(ys, xs, indexing='ij')
+    # Use explicit broadcasting shapes:
+    grid_y = ys.view(-1, 1)  # Shape: (H_out, 1)
+    grid_x = xs.view(1, -1)  # Shape: (1, W_out)
+    # expand to 2D grids
+    grid_y = grid_y.expand(H_out, W_out)
+    grid_x = grid_x.expand(H_out, W_out)
+
+    ones = torch.ones_like(grid_x)
+    base_grid = torch.stack((grid_x, grid_y, ones), dim=-1)
+    base_grid = base_grid.unsqueeze(0).expand(B, -1, -1, -1)
+
+    norm_grid = torch.einsum('bij,bhwj->bhwi', theta, base_grid)
+    x = norm_grid[..., 0]
+    y = norm_grid[..., 1]
+
+    if align_corners:
+        x = (x + 1) * (W - 1) / 2
+        y = (y + 1) * (H - 1) / 2
+        reflect_x_low, reflect_x_high = 0.0, W - 1.0
+        reflect_y_low, reflect_y_high = 0.0, H - 1.0
+    else:
+        x = ((x + 1) * W - 1) / 2
+        y = ((y + 1) * H - 1) / 2
+        reflect_x_low, reflect_x_high = -0.5, W - 0.5
+        reflect_y_low, reflect_y_high = -0.5, H - 0.5
+
+    if padding_mode == 'border':
+        x = x.clamp(0, W - 1)
+        y = y.clamp(0, H - 1)
+    elif padding_mode == 'reflection':
+        x = _reflect_coordinates(x, reflect_x_low, reflect_x_high).clamp(0, W - 1)
+        y = _reflect_coordinates(y, reflect_y_low, reflect_y_high).clamp(0, H - 1)
+
+    src_work = src
+    if src_work.dtype != x.dtype:
+        src_work = src_work.to(x.dtype)
+
+    # unused (changed get_rotated_roi to use mode='bilinear')
+    if mode == 'nearest':
+        xn = torch.round(x)
+        yn = torch.round(y)
+        valid = (xn >= 0) & (xn <= W - 1) & (yn >= 0) & (yn <= H - 1)
+        x_idx = xn.clamp(0, W - 1).long()
+        y_idx = yn.clamp(0, H - 1).long()
+        out = _gather_from_hw(src_work, x_idx, y_idx)
+        if padding_mode == 'zeros':
+            out = out * valid.unsqueeze(1).to(out.dtype)
+        return out
+
+    x0 = torch.floor(x)
+    y0 = torch.floor(y)
+    x1 = x0 + 1
+    y1 = y0 + 1
+
+    wa = (x1 - x) * (y1 - y)
+    wb = (x1 - x) * (y - y0)
+    wc = (x - x0) * (y1 - y)
+    wd = (x - x0) * (y - y0)
+
+    # tensorRT struggles with bitwise operations
+    # x0_valid = (x0 >= 0) & (x0 <= W - 1)
+    # x1_valid = (x1 >= 0) & (x1 <= W - 1)
+    # y0_valid = (y0 >= 0) & (y0 <= H - 1)
+    # y1_valid = (y1 >= 0) & (y1 <= H - 1)
+    # multiplying by a mask is equivalent
+    x0_valid = (x0 >= 0) * (x0 <= W - 1)
+    x1_valid = (x1 >= 0) * (x1 <= W - 1)
+    y0_valid = (y0 >= 0) * (y0 <= H - 1)
+    y1_valid = (y1 >= 0) * (y1 <= H - 1)
+
+    if padding_mode == 'zeros':
+        # tensorRT struggles with bitwise operations
+        # wa = wa * (x0_valid & y0_valid).to(wa.dtype)
+        # wb = wb * (x0_valid & y1_valid).to(wb.dtype)
+        # wc = wc * (x1_valid & y0_valid).to(wc.dtype)
+        # wd = wd * (x1_valid & y1_valid).to(wd.dtype)
+        # multiplying by a mask is equivalent
+
+        wa = wa * (x0_valid.to(wa.dtype) * y0_valid.to(wa.dtype))
+        wb = wb * (x0_valid.to(wb.dtype) * y1_valid.to(wb.dtype))
+        wc = wc * (x1_valid.to(wc.dtype) * y0_valid.to(wc.dtype))
+        wd = wd * (x1_valid.to(wd.dtype) * y1_valid.to(wd.dtype))
+
+    x0_idx = x0.clamp(0, W - 1).long()
+    y0_idx = y0.clamp(0, H - 1).long()
+    x1_idx = x1.clamp(0, W - 1).long()
+    y1_idx = y1.clamp(0, H - 1).long()
+
+    Ia = _gather_from_hw(src_work, x0_idx, y0_idx)
+    Ib = _gather_from_hw(src_work, x0_idx, y1_idx)
+    Ic = _gather_from_hw(src_work, x1_idx, y0_idx)
+    Id = _gather_from_hw(src_work, x1_idx, y1_idx)
+
+    out = (Ia * wa.unsqueeze(1) +
+           Ib * wb.unsqueeze(1) +
+           Ic * wc.unsqueeze(1) +
+           Id * wd.unsqueeze(1))
+    return out
+
+
 def warp_affine(
         src, M, dsize,
         mode='bilinear',
@@ -347,14 +567,14 @@ def warp_affine(
     dst_norm_trans_src_norm = normalize_homography(M_3x3, (H, W), dsize)
 
     # src_norm_trans_dst_norm = torch.inverse(dst_norm_trans_src_norm)
-    src_norm_trans_dst_norm = _torch_inverse_cast(dst_norm_trans_src_norm)
-    grid = F.affine_grid(src_norm_trans_dst_norm[:, :2, :],
-                         [B, C, dsize[0], dsize[1]],
-                         align_corners=align_corners)
-
-    return F.grid_sample(src.half() if grid.dtype==torch.half else src, 
-                         grid, align_corners=align_corners, mode=mode,
-                         padding_mode=padding_mode)
+    src_norm_trans_dst_norm = _3x3_cramer_inverse(dst_norm_trans_src_norm)
+    src_for_sample = src.half() if src_norm_trans_dst_norm.dtype == torch.half else src
+    return affine_grid_sample_approx(src_for_sample,
+                                     src_norm_trans_dst_norm[:, :2, :],
+                                     dsize,
+                                     mode=mode,
+                                     padding_mode=padding_mode,
+                                     align_corners=align_corners)
 
 
 class Test:

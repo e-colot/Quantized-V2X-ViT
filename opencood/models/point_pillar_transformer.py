@@ -20,7 +20,9 @@ class PointPillarTransformer(nn.Module):
                                     num_point_features=4,
                                     voxel_size=args['voxel_size'],
                                     point_cloud_range=args['lidar_range'])
-        self.scatter = PointPillarScatter(args['point_pillar_scatter'])
+        scatter_cfg = dict(args['point_pillar_scatter'])
+        scatter_cfg.setdefault('max_cav', self.max_cav)
+        self.scatter = PointPillarScatter(scatter_cfg)
         self.backbone = BaseBEVBackbone(args['base_bev_backbone'], 64)
         # used to downsample the feature map for efficient computation
         self.shrink_flag = False

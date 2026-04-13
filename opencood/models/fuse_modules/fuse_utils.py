@@ -1,14 +1,6 @@
 # -*- coding: utf-8 -*-
-# Author: Runsheng Xu <rxx3386@ucla.edu>
-# License: TDG-Attribution-NonCommercial-NoDistrib
-
 
 import torch
-import numpy as np
-
-from einops import rearrange
-from opencood.utils.common_utils import torch_tensor_to_numpy
-
 
 def regroup(dense_feature, record_len, max_len):
     """
@@ -27,40 +19,44 @@ def regroup(dense_feature, record_len, max_len):
     -------
     regroup_feature : torch.Tensor
         B, L, C, H, W
+    mask : torch.Tensor
+        B, L
     """
-    cum_sum_len = list(np.cumsum(torch_tensor_to_numpy(record_len)))
-    split_features = torch.tensor_split(dense_feature,
-                                        cum_sum_len[:-1])
-    regroup_features = []
-    mask = []
+    N, C, H, W = dense_feature.shape
+    
+    if not isinstance(record_len, torch.Tensor):
+        record_len = torch.tensor(record_len, device=dense_feature.device)
+    
+    B = record_len.shape[0]
+    L = max_len
+    device = dense_feature.device
+    dtype = dense_feature.dtype
 
-    for split_feature in split_features:
-        # M, C, H, W
-        feature_shape = split_feature.shape
+    # Create the grid mask to identify valid slots in the BxL output
+    lp_indices = torch.arange(L, device=device).view(1, L).expand(B, L)
+    mask = lp_indices < record_len.unsqueeze(1) # Boolean (B, L)
 
-        # the maximum M is 5 as most 5 cavs
-        padding_len = max_len - feature_shape[0]
-        mask.append([1] * feature_shape[0] + [0] * padding_len)
+    # Use cumsum to assign a unique sequential index to each True value in the mask
+    cumulative_idx = torch.cumsum(mask.view(-1).to(torch.int32), dim=0).view(B, L)
+    # Convert to 0-based indexing for the N dimension
+    target_n_idx = (cumulative_idx - 1)
+    
+    # Create a global range of indices for the input N features
+    n_range = torch.arange(N, device=device).view(N, 1, 1)
+    
+    # Generate an assignment matrix: True if the N-th feature belongs in slot (b, l)
+    assignment_mask = (n_range == target_n_idx.unsqueeze(0))
+    # Ensure only valid mask slots are considered to avoid mapping padding to features
+    assignment_mask = assignment_mask * mask.unsqueeze(0)
 
-        padding_tensor = torch.zeros(padding_len, feature_shape[1],
-                                     feature_shape[2], feature_shape[3])
-        padding_tensor = padding_tensor.to(split_feature.device)
+    # Flatten spatial and channel dims to treat each object as a single vector
+    dense_flat = dense_feature.view(N, -1)
+    
+    # Map features to the grid via Einstein summation (dot product of assignment and features)
+    # n,v: N, CHW | n,b,l: N, B, L -> b,l,v: B, L, CHW
+    out_flat = torch.einsum('nv,nbl->blv', dense_flat, assignment_mask.to(dtype))
+    
+    # Reshape the flattened result back into the structured 5D output
+    regroup_features = out_flat.view(B, L, C, H, W)
 
-        split_feature = torch.cat([split_feature, padding_tensor],
-                                  dim=0)
-
-        # 1, 5C, H, W
-        split_feature = split_feature.view(-1,
-                                           feature_shape[2],
-                                           feature_shape[3]).unsqueeze(0)
-        regroup_features.append(split_feature)
-
-    # B, 5C, H, W
-    regroup_features = torch.cat(regroup_features, dim=0)
-    # B, L, C, H, W
-    regroup_features = rearrange(regroup_features,
-                                 'b (l c) h w -> b l c h w',
-                                 l=max_len)
-    mask = torch.from_numpy(np.array(mask)).to(regroup_features.device)
-
-    return regroup_features, mask
+    return regroup_features, mask.to(dtype)

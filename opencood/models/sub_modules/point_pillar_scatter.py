@@ -8,41 +8,47 @@ class PointPillarScatter(nn.Module):
 
         self.model_cfg = model_cfg
         self.num_bev_features = self.model_cfg['num_features']
+        self.max_cav = self.model_cfg.get('max_cav', None)
         self.nx, self.ny, self.nz = model_cfg['grid_size']
         assert self.nz == 1
 
     def forward(self, batch_dict):
-        pillar_features, coords = batch_dict['pillar_features'], batch_dict[
-            'voxel_coords']
-        batch_spatial_features = []
-        batch_size = coords[:, 0].max().int().item() + 1
+        pillar_features = batch_dict['pillar_features']  # (N, C)
+        coords = batch_dict['voxel_coords']  # (N, 4)
+        record_len = batch_dict['record_len']
 
-        for batch_idx in range(batch_size):
-            spatial_feature = torch.zeros(
-                self.num_bev_features,
-                self.nz * self.nx * self.ny,
-                dtype=pillar_features.dtype,
-                device=pillar_features.device)
+        # In export mode we avoid tensor->python scalar conversions by using
+        # a fixed upper bound: num_samples_in_batch * max_cav.
+        if self.max_cav is not None:
+            upper_batch_bound = record_len.shape[0] * self.max_cav
+        else:
+            Warning('Taking this branch might block a tensorRT conversion')
+            upper_batch_bound = coords[:, 0].max().int().item() + 1
 
-            batch_mask = coords[:, 0] == batch_idx
-            this_coords = coords[batch_mask, :]
+        device = pillar_features.device
+        dtype = pillar_features.dtype
 
-            indices = this_coords[:, 1] + \
-                      this_coords[:, 2] * self.nx + \
-                      this_coords[:, 3]
-            indices = indices.type(torch.long)
+        # Each pillar is mapped to a unique position in a flattened (B * H * W) grid.
+        # coords[:, 0] is batch_idx,
+        # coords[:, 2] is y,
+        # coords[:, 3] is x.
+        # (nz is 1, so coords[:, 1] is ignored)
+        spatial_indices = (coords[:, 0].to(torch.int64) * (self.nx * self.ny) +
+                          coords[:, 2].to(torch.int64) * self.nx +
+                          coords[:, 3].to(torch.int64))
 
-            pillars = pillar_features[batch_mask, :]
-            pillars = pillars.t()
-            spatial_feature[:, indices] = pillars
-            batch_spatial_features.append(spatial_feature)
+        batch_spatial_features = torch.zeros((upper_batch_bound, self.num_bev_features, self.nx * self.ny),
+            dtype=dtype, device=device)
+        
+        batch_spatial_features = batch_spatial_features.view(self.num_bev_features, -1)
 
-        batch_spatial_features = \
-            torch.stack(batch_spatial_features, 0)
-        batch_spatial_features = \
-            batch_spatial_features.view(batch_size, self.num_bev_features *
-                                        self.nz, self.ny, self.nx)
+        full_indices = spatial_indices.unsqueeze(0).expand(self.num_bev_features, -1)
+        pillars = pillar_features.t()
+
+        batch_spatial_features.scatter_(1, full_indices, pillars)
+        batch_spatial_features = batch_spatial_features.view(
+            self.num_bev_features, upper_batch_bound, self.ny, self.nx
+        ).permute(1, 0, 2, 3).contiguous()
+
         batch_dict['spatial_features'] = batch_spatial_features
-
         return batch_dict
-

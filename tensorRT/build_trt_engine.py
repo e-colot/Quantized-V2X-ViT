@@ -1,5 +1,6 @@
 import os
 import importlib
+from typing import Optional
 
 import torch
 
@@ -24,6 +25,10 @@ class Arguments:
         self.max_points_per_voxel = 32
         self.num_point_features = 4
         self.max_cavs = 5
+
+        # Script-first path can remove some trace-only Python artifacts.
+        self.try_script_first = True
+        self.try_script_submodules = False
 
 
 class TRTInputAdapter(torch.nn.Module):
@@ -98,6 +103,30 @@ def _build_trt_inputs(opt, torch_tensorrt):
     ]
 
 
+def _try_script_module(module, module_name: str) -> Optional[torch.jit.ScriptModule]:
+    try:
+        scripted = torch.jit.script(module)
+        scripted = torch.jit.freeze(scripted)
+        print(f'Successfully scripted {module_name}')
+        return scripted
+    except Exception as exc:
+        print(f'Could not script {module_name}: {exc.__class__.__name__}: {exc}')
+        return None
+
+
+def _prepare_torchscript_module(adapter, example_inputs, opt):
+    if opt.try_script_first:
+        scripted_adapter = _try_script_module(adapter, 'adapter')
+        if scripted_adapter is not None:
+            return scripted_adapter
+
+    print('Falling back to torch.jit.trace for adapter...')
+    with torch.no_grad():
+        traced = torch.jit.trace(adapter, example_inputs, strict=False)
+        traced = torch.jit.freeze(traced)
+    return traced
+
+
 def main():
     opt = Arguments()
     assert opt.fusion_method in ['late', 'early', 'intermediate']
@@ -122,13 +151,18 @@ def main():
     _, model = train_utils.load_saved_model(opt.model_dir, model)
     model.eval()
 
+    if opt.try_script_submodules:
+        print('Attempting to script the whole model before adapter export...')
+        scripted_model = _try_script_module(model, 'model')
+        if scripted_model is not None:
+            model = scripted_model
+        else:
+            print('Whole-model scripting failed; continuing with eager model.')
+
     print('Preparing TorchScript adapter...')
     adapter = TRTInputAdapter(model).to(device).eval()
     example_inputs = _build_example_inputs(opt, device)
-
-    with torch.no_grad():
-        scripted = torch.jit.trace(adapter, example_inputs, strict=False)
-        scripted = torch.jit.freeze(scripted)
+    scripted = _prepare_torchscript_module(adapter, example_inputs, opt)
 
     enabled_precisions = {torch.float16} if opt.precision == 'fp16' else {torch.float32}
     trt_inputs = _build_trt_inputs(opt, torch_tensorrt)

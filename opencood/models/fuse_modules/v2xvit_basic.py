@@ -163,7 +163,7 @@ class V2XTEncoder(nn.Module):
         x = x[..., :-3]
         if self.use_RTE:
             # dt: (B,L)
-            dt = prior_encoding[:, :, 0, 0, 1].to(torch.int)
+            dt = prior_encoding[:, :, 0, 0, 1].to(torch.int32)
             x = self.rte(x, dt)
         x = self.sttf(x, mask, spatial_correction_matrix)
         com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(
