@@ -225,6 +225,15 @@ def _prepare_torchscript_module(adapter, opt, hypes):
             trace_inputs
         )
         print("Successfully traced the adapter.")
+
+        print("DEBUG: TorchScript Graph (Inlined):")
+        print(traced_adapter.graph)
+
+        # Search specifically for the 'item' node in the graph string
+        graph_str = str(traced_adapter.graph)
+        if "aten::item" in graph_str:
+            print("\n!!! FOUND aten::item in the graph !!!")
+
         return traced_adapter
     except Exception as e:
         print(f"Tracing failed: {e}")

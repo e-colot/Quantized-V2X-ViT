@@ -1,4 +1,4 @@
-version: 3
+version: 4
 
 # Use exact mappings when one old key should become exactly one new key.
 rename_exact: []
@@ -89,3 +89,5 @@ ignore_missing_keys_regex:
   # STTF runtime buffers added for TensorRT-friendly graph state.
   - '\.discrete_ratio$'
   - '\.downsample_rate$'
+  # RTE sinusoid precomputed buffer introduced in the rewritten temporal encoder.
+  - '^fusion_net\.encoder\.rte\.emb\.div_term$'

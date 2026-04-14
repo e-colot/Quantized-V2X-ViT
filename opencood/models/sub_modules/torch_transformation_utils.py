@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 
-def get_roi_and_cav_mask(shape: List[int], cav_mask: torch.Tensor, 
+def get_roi_and_cav_mask(shape: Tuple[int, int, int, int, int], cav_mask: torch.Tensor, 
                          spatial_correction_matrix: torch.Tensor,
                          discrete_ratio: float, downsample_rate: float):
     """
@@ -33,7 +33,10 @@ def get_roi_and_cav_mask(shape: List[int], cav_mask: torch.Tensor,
         Combined mask with shape (B, H, W, L, 1).
 
     """
-    B, L, H, W, C = shape
+    B = shape[0]
+    L = shape[1]
+    H = shape[2]
+    W = shape[3]
     C = 1
     # (B,L,4,4)
     dist_correction_matrix = get_discretized_transformation_matrix(
@@ -697,7 +700,7 @@ class Test:
         correction_matrix = Test.load_raw_transformation_matrix2(5, 10)
         correction_matrix = torch.cat([correction_matrix, correction_matrix],
                                       dim=0)
-        mask = get_roi_and_cav_mask([B, L, H, W, C], cav_mask, 
+        mask = get_roi_and_cav_mask((B, L, H, W, C), cav_mask, 
                                     correction_matrix, 0.4, 4)
         plt.matshow(mask[0, :, :, 0, 0])
         plt.show()

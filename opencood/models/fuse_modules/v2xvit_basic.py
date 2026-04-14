@@ -43,51 +43,64 @@ class STTF(nn.Module):
         return x
 
 
-class RelTemporalEncoding(nn.Module):
-    """
-    Implement the Temporal Encoding (Sinusoid) function.
-    """
-
-    def __init__(self, n_hid, RTE_ratio, max_len=100, dropout=0.2):
-        super(RelTemporalEncoding, self).__init__()
-        position = torch.arange(0., max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, n_hid, 2) *
-                             -(math.log(10000.0) / n_hid))
-        emb = nn.Embedding(max_len, n_hid)
-        emb.weight.data[:, 0::2] = torch.sin(position * div_term) / math.sqrt(
-            n_hid)
-        emb.weight.data[:, 1::2] = torch.cos(position * div_term) / math.sqrt(
-            n_hid)
-        emb.requires_grad = False
-        self.RTE_ratio = RTE_ratio
-        self.emb = emb
-        self.lin = nn.Linear(n_hid, n_hid)
-
-    def forward(self, x, t):
-        # When t has unit of 50ms, rte_ratio=1.
-        # So we can train on 100ms but test on 50ms
-        return x + self.lin(self.emb(t * self.RTE_ratio)).unsqueeze(
-            0).unsqueeze(1)
-
-
 class RTE(nn.Module):
     def __init__(self, dim, RTE_ratio=2):
         super(RTE, self).__init__()
         self.RTE_ratio = RTE_ratio
-
         self.emb = RelTemporalEncoding(dim, RTE_ratio=self.RTE_ratio)
 
     def forward(self, x, dts):
-        # x: (B,L,H,W,C)
-        # dts: (B,L)
-        rte_batch = []
-        for b in range(x.shape[0]):
-            rte_list = []
-            for i in range(x.shape[1]):
-                rte_list.append(
-                    self.emb(x[b, i, :, :, :], dts[b, i]).unsqueeze(0))
-            rte_batch.append(torch.cat(rte_list, dim=0).unsqueeze(0))
-        return torch.cat(rte_batch, dim=0)
+        # x: (B, L, H, W, C)
+        # dts: (B, L)
+        B, L, H, W, C = x.shape
+        
+        # 1. Flatten B and L to process everything in one go
+        x_flat = x.view(B * L, H, W, C)
+        dts_flat = dts.view(B * L)
+        
+        # 2. Call the vectorized embedding
+        # Result: (B*L, H, W, C)
+        x_rte = self.emb(x_flat, dts_flat)
+        
+        # 3. Reshape back
+        return x_rte.view(B, L, H, W, C)
+
+
+class RelTemporalEncoding(nn.Module):
+    def __init__(self, n_hid, RTE_ratio, max_len=100):
+        super(RelTemporalEncoding, self).__init__()
+        # Use a buffer so it's moved to GPU automatically
+        self.register_buffer('div_term', torch.exp(torch.arange(0, n_hid, 2) *
+                             -(math.log(10000.0) / n_hid)))
+        
+        # Use an actual Embedding layer or a functional approach
+        self.emb = nn.Embedding(max_len, n_hid)
+        
+        # Precompute sinusoid weights
+        position = torch.arange(0., max_len).unsqueeze(1)
+        self.emb.weight.data[:, 0::2] = torch.sin(position * self.div_term) / math.sqrt(n_hid)
+        self.emb.weight.data[:, 1::2] = torch.cos(position * self.div_term) / math.sqrt(n_hid)
+        self.emb.weight.requires_grad = False
+        
+        self.RTE_ratio = RTE_ratio
+        self.lin = nn.Linear(n_hid, n_hid)
+
+    def forward(self, x, t):
+        # x: (N, H, W, C)  <- where N is B*L
+        # t: (N)
+        
+        # Compute indices: (N)
+        # Ensure t is treated as a Tensor throughout
+        indices = (t * self.RTE_ratio).long()
+        
+        # Get temporal embeddings: (N, C)
+        t_emb = self.lin(self.emb(indices))
+        
+        # Broadcast across H and W: (N, 1, 1, C)
+        t_emb = t_emb.unsqueeze(1).unsqueeze(2)
+        
+        # Return combined feature
+        return x + t_emb
 
 
 class V2XFusionBlock(nn.Module):
@@ -125,11 +138,6 @@ class V2XFusionBlock(nn.Module):
                                             'fusion_method'])]))
 
     def forward(self, x, mask, prior_encoding):
-        # for cav_attn, pwindow_attn in self.layers:
-        #     x = cav_attn(x, mask=mask, prior_encoding=prior_encoding) + x
-        #     x = pwindow_attn(x) + x
-        # return x
-
         for layer in self.layers:
             x = layer[0](x, mask=mask, prior_encoding=prior_encoding) + x
             x = layer[1](x) + x
@@ -167,12 +175,6 @@ class V2XTEncoder(nn.Module):
                 PreNormedFeedForward(cav_att_config['dim'], mlp_dim,
                                     dropout=dropout)]))
 
-        # for _ in range(depth):
-        #     self.layers.append(nn.ModuleList([
-        #         V2XFusionBlock(num_blocks, cav_att_config, pwindow_att_config),
-        #         PreNormedFeedForward(cav_att_config['dim'], mlp_dim,
-        #                             dropout=dropout)]))
-
     def forward(self, x, mask, spatial_correction_matrix):
 
         # transform the features to the current timestamp
@@ -187,7 +189,7 @@ class V2XTEncoder(nn.Module):
             x = self.rte(x, dt)
         x = self.sttf(x, mask, spatial_correction_matrix)
         com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(
-            3) if not self.use_roi_mask else get_roi_and_cav_mask(list(x.shape),
+            3) if not self.use_roi_mask else get_roi_and_cav_mask(x.shape,
                                                                   mask,
                                                                   spatial_correction_matrix,
                                                                   self.discrete_ratio,

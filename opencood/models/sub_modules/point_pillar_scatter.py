@@ -18,38 +18,30 @@ class PointPillarScatter(nn.Module):
         assert self.nz == 1
 
     def forward(self, voxel_coords, record_len, pillar_features):
-
-        device = 'cuda'
+        device = pillar_features.device
         dtype = pillar_features.dtype
 
-        # In export mode we avoid tensor->python scalar conversions by using
-        # a fixed upper bound: num_samples_in_batch * max_cav.
-        if self.max_cav is not None:
-            upper_batch_bound = record_len.shape[0] * self.max_cav
-        else:
-            raise NotImplementedError
-            # upper_batch_bound = voxel_coords[:, 0].max().int().item() + 1
-
-        # Each pillar is mapped to a unique position in a flattened (B * H * W) grid.
-        # voxel_coords[:, 0] is batch_idx,
-        # voxel_coords[:, 2] is y,
-        # voxel_coords[:, 3] is x.
-        # (nz is 1, so voxel_coords[:, 1] is ignored)
-        spatial_indices = (voxel_coords[:, 0].to(torch.int64) * (self.nx * self.ny) +
-                          voxel_coords[:, 2].to(torch.int64) * self.nx +
-                          voxel_coords[:, 3].to(torch.int64))
-
-        batch_spatial_features = torch.zeros((upper_batch_bound, self.num_bev_features, self.nx * self.ny),
-            dtype=dtype, device=device)
+        batch_size = record_len.shape[0]
+        upper_batch_bound = batch_size * self.max_cav
         
-        batch_spatial_features = batch_spatial_features.view(self.num_bev_features, -1)
+        # Flattened spatial size
+        num_pixels = self.ny * self.nx
+        total_elements = upper_batch_bound * num_pixels
 
-        full_indices = spatial_indices.unsqueeze(0).expand(self.num_bev_features, -1)
-        pillars = pillar_features.t()
+        # flat indices for the (B*max_cav * H * W) dimension
+        indices = (voxel_coords[:, 0].long() * num_pixels +
+                   voxel_coords[:, 2].long() * self.nx +
+                   voxel_coords[:, 3].long())
 
-        batch_spatial_features.scatter_(1, full_indices, pillars)
-        batch_spatial_features = batch_spatial_features.view(
-            self.num_bev_features, upper_batch_bound, self.ny, self.nx
-        ).permute(1, 0, 2, 3).contiguous()
+        # canvas: [C, B*max_cav*H*W]
+        canvas = torch.zeros((self.num_bev_features, total_elements),
+                             dtype=dtype, device=device)
+
+        indices_expanded = indices.unsqueeze(0).expand(self.num_bev_features, -1)
+        canvas.scatter_(1, indices_expanded, pillar_features.t())
+
+        # reshape and permute to [B*max_cav, C, H, W]
+        batch_spatial_features = canvas.view(self.num_bev_features, upper_batch_bound, self.ny, self.nx)
+        batch_spatial_features = batch_spatial_features.permute(1, 0, 2, 3).contiguous()
 
         return batch_spatial_features
