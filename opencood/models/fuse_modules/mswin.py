@@ -135,28 +135,30 @@ class PyramidWindowAttention(nn.Module):
 
         for (head, dim_head, ws) in zip(heads, dim_heads, window_size):
             self.pwmsa.append(BaseWindowAttention(dim,
-                                                  head,
-                                                  dim_head,
-                                                  drop_out,
-                                                  ws,
-                                                  relative_pos_embedding))
+                                                 head,
+                                                 dim_head,
+                                                 drop_out,
+                                                 ws,
+                                                 relative_pos_embedding))
+        
         self.fuse_method = fuse_method
+        
+        # TensorRT Fix: Store the number of windows as a buffer
+        num_windows = len(self.pwmsa)
+        self.register_buffer('num_windows_tensor', torch.tensor([num_windows], dtype=torch.float32))
+
         if fuse_method == 'split_attn':
             self.split_attn = SplitAttn(256)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        output = torch.zeros_like(x)
-        # naive fusion will just sum up all window attention output and do a
-        # mean
+        
+        window_outputs = torch.stack([wmsa(x) for wmsa in self.pwmsa], dim=0)
+
         if self.fuse_method == 'naive':
-            for wmsa in self.pwmsa:
-                output = output + wmsa(x)
-            return output / len(self.pwmsa)
+            return torch.mean(window_outputs, dim=0)
 
         else:
             # self.fuse_method == 'split_attn'
-            window_list = []
-            for wmsa in self.pwmsa:
-                window_list.append(wmsa(x))
+            window_list = torch.unbind(window_outputs, dim=0)
             return self.split_attn(window_list)
         

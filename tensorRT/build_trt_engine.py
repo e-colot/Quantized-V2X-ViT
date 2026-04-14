@@ -13,7 +13,7 @@ class Arguments:
     def __init__(self):
         self.model_dir = 'opencood/v2x-vit'
         self.fusion_method = 'intermediate'
-        self.engine_path = 'tensorRT/v2xvit_fp16.engine'
+        self.engine_path = 'tensorRT/v2xvit_fp32.engine'
         self.precision = 'fp32'  # 'fp16' or 'fp32'
         self.device = 'cuda:0'
 
@@ -208,7 +208,7 @@ def _prepare_torchscript_module(adapter, opt, hypes):
     # Tracing fallback with real validation data (1 sample per sequence for shape collection).
     print('Collecting trace shapes from validation dataset...')
     dataset, per_sequence_shapes = _collect_validation_shapes(hypes)
-    _print_shape_summary(per_sequence_shapes)
+    # _print_shape_summary(per_sequence_shapes)
     _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes)
 
     trace_idx = _select_trace_dataset_index(per_sequence_shapes, opt)

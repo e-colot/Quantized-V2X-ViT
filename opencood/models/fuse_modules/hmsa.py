@@ -80,31 +80,35 @@ class HGTCavAttention(nn.Module):
         return type1 * self.num_types + type2
 
     def get_hetero_edge_weights(self, x, types):
-        w_att_batch = []
-        w_msg_batch = []
-
-        for b in range(x.shape[0]):
-            w_att_list = []
-            w_msg_list = []
-
-            for i in range(x.shape[-2]):
-                w_att_i_list = []
-                w_msg_i_list = []
-
-                for j in range(x.shape[-2]):
-                    e_type = self.get_relation_type_index(types[b, i],
-                                                          types[b, j])
-                    w_att_i_list.append(self.relation_att[e_type].unsqueeze(0))
-                    w_msg_i_list.append(self.relation_msg[e_type].unsqueeze(0))
-                w_att_list.append(torch.cat(w_att_i_list, dim=0).unsqueeze(0))
-                w_msg_list.append(torch.cat(w_msg_i_list, dim=0).unsqueeze(0))
-
-            w_att_batch.append(torch.cat(w_att_list, dim=0).unsqueeze(0))
-            w_msg_batch.append(torch.cat(w_msg_list, dim=0).unsqueeze(0))
-
-        # (B,M,L,L,C_head,C_head)
-        w_att = torch.cat(w_att_batch, dim=0).permute(0, 3, 1, 2, 4, 5)
-        w_msg = torch.cat(w_msg_batch, dim=0).permute(0, 3, 1, 2, 4, 5)
+        # types shape: (B, L)
+        B, L = types.shape
+        
+        # 1. Compute all pairwise relation indices: (B, L, L)
+        # This replaces the get_relation_type_index logic
+        # type1: (B, L, 1), type2: (B, 1, L)
+        t1 = types.unsqueeze(2) 
+        t2 = types.unsqueeze(1)
+        
+        # relation_idx shape: (B, L, L)
+        relation_idx = t1 * self.num_types + t2
+        
+        # 2. Use the indices to gather weights from the Parameter tensors
+        # relation_att: (num_relations, heads, D, D)
+        # We flatten relation_idx to (B*L*L) to gather, then reshape
+        flat_idx = relation_idx.view(-1)
+        
+        # Gather weights: (B*L*L, heads, D, D)
+        w_att = self.relation_att[flat_idx]
+        w_msg = self.relation_msg[flat_idx]
+        
+        # 3. Reshape back to (B, L, L, heads, D, D)
+        w_att = w_att.view(B, L, L, self.heads, -1, w_att.shape[-1])
+        w_msg = w_msg.view(B, L, L, self.heads, -1, w_msg.shape[-1])
+        
+        # 4. Permute to match your forward pass expectation: (B, M, L, L, D, D)
+        w_att = w_att.permute(0, 3, 1, 2, 4, 5).contiguous()
+        w_msg = w_msg.permute(0, 3, 1, 2, 4, 5).contiguous()
+        
         return w_att, w_msg
 
     def to_out(self, x, types):

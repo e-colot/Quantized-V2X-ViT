@@ -107,12 +107,25 @@ def remap_checkpoint_for_model(
             continue
         compatible[key] = value
 
-    missing_in_checkpoint = [k for k in model_state.keys() if k not in compatible]
+    # Filter out new buffers that don't exist in old checkpoints (e.g., TensorRT optim buffers)
+    new_buffers_to_exclude = {
+        k for k in model_state.keys() 
+        if k.endswith('.num_windows_tensor')  # TensorRT PyramidWindow buffer
+    }
+    
+    missing_in_checkpoint = [
+        k for k in model_state.keys() 
+        if k not in compatible 
+        and k not in new_buffers_to_exclude
+    ]
+    
+    # Adjust total model keys to exclude new non-loadable buffers for accurate coverage calculation
+    total_model_keys_loadable = len(model_state) - len(new_buffers_to_exclude)
 
     report = {
         'rules_path': rules_path,
         'total_checkpoint_keys': len(state_dict),
-        'total_model_keys': len(model_state),
+        'total_model_keys': total_model_keys_loadable,
         'compatible_keys': len(compatible),
         'renamed_pairs': renamed_pairs,
         'shape_mismatch': shape_mismatch,
