@@ -23,12 +23,15 @@ class STTF(nn.Module):
         # Only compensate non-ego vehicles
         B, L, C, H, W = x.shape
 
-        T = get_transformation_matrix(
-            dist_correction_matrix[:, 1:, :, :].reshape(-1, 2, 3), (H, W))
-        cav_features = warp_affine(x[:, 1:, :, :, :].reshape(-1, C, H, W), T,
-                                   (H, W))
-        cav_features = cav_features.reshape(B, -1, C, H, W)
-        x = torch.cat([x[:, 0, :, :, :].unsqueeze(1), cav_features], dim=1)
+        if L > 1:
+            T = get_transformation_matrix(
+                dist_correction_matrix[:, 1:, :, :].reshape(-1, 2, 3), (H, W))
+            cav_features = warp_affine(x[:, 1:, :, :, :].reshape(-1, C, H, W), T,
+                                       (H, W))
+            cav_features = cav_features.reshape(B, -1, C, H, W)
+            x = torch.cat([x[:, 0, :, :, :].unsqueeze(1), cav_features], dim=1)
+        else:
+            x = x[:, 0, :, :, :].unsqueeze(1)
         x = x.permute(0, 1, 3, 4, 2)
         return x
 

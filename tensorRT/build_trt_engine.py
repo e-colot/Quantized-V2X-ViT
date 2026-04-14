@@ -6,6 +6,7 @@ import torch
 
 import opencood.hypes_yaml.yaml_utils as yaml_utils
 from opencood.tools import train_utils
+from opencood.data_utils.datasets import build_dataset
 
 
 class Arguments:
@@ -27,7 +28,7 @@ class Arguments:
         self.max_cavs = 5
 
         # Script-first path can remove some trace-only Python artifacts.
-        self.try_script_first = True
+        self.try_script_first = False
         self.try_script_submodules = False
 
 
@@ -67,6 +68,98 @@ class TRTInputAdapter(torch.nn.Module):
         return output_dict['psm'], output_dict['rm']
 
 
+def _sequence_start_indices(opencood_dataset):
+    # len_record stores cumulative frame counts per scenario.
+    cumulative = list(opencood_dataset.len_record)
+    return [0] + cumulative[:-1]
+
+
+def _sequence_last_indices(opencood_dataset):
+    cumulative = list(opencood_dataset.len_record)
+    return [x - 1 for x in cumulative]
+
+
+def _scenario_edge_indices(opencood_dataset):
+    starts = _sequence_start_indices(opencood_dataset)
+    lasts = _sequence_last_indices(opencood_dataset)
+    # Preserve order while deduplicating (single-frame scenarios).
+    return list(dict.fromkeys(starts + lasts))
+
+
+def _extract_model_inputs_from_batch(batch_data):
+    ego = batch_data['ego']
+    processed = ego['processed_lidar']
+    return (
+        processed['voxel_features'],
+        processed['voxel_coords'],
+        processed['voxel_num_points'],
+        ego['record_len'],
+        ego['prior_encoding'],
+        ego['spatial_correction_matrix'],
+    )
+
+
+def _collect_validation_shapes(hypes):
+    dataset = build_dataset(hypes, visualize=False, train=False)
+    edge_indices = _scenario_edge_indices(dataset)
+
+    per_sequence_shapes = []
+    for dataset_idx in edge_indices:
+        sample = dataset[dataset_idx]
+        batch_data = dataset.collate_batch_test([sample])
+        inputs = _extract_model_inputs_from_batch(batch_data)
+        per_sequence_shapes.append({
+            'dataset_idx': dataset_idx,
+            'voxel_features': tuple(inputs[0].shape),
+            'voxel_coords': tuple(inputs[1].shape),
+            'voxel_num_points': tuple(inputs[2].shape),
+            'record_len': tuple(inputs[3].shape),
+            'prior_encoding': tuple(inputs[4].shape),
+            'spatial_correction_matrix': tuple(inputs[5].shape),
+        })
+
+    return dataset, per_sequence_shapes
+
+
+def _select_trace_dataset_index(per_sequence_shapes, opt):
+    # Pick a real validation sample closest to TRT opt voxel count.
+    return min(
+        per_sequence_shapes,
+        key=lambda item: abs(item['voxel_features'][0] - opt.opt_num_voxels),
+    )['dataset_idx']
+
+
+def _print_shape_summary(per_sequence_shapes):
+    voxel_counts = [s['voxel_features'][0] for s in per_sequence_shapes]
+    coord_counts = [s['voxel_coords'][0] for s in per_sequence_shapes]
+    point_counts = [s['voxel_num_points'][0] for s in per_sequence_shapes]
+    print(f'Collected first+last samples from each validation sequence: {len(per_sequence_shapes)} samples')
+    print(
+        'Voxel dim-0 ranges from dataset samples: '
+        f'features={min(voxel_counts)}..{max(voxel_counts)}, '
+        f'coords={min(coord_counts)}..{max(coord_counts)}, '
+        f'num_points={min(point_counts)}..{max(point_counts)}'
+    )
+
+
+def _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes):
+    voxel_counts = sorted(s['voxel_features'][0] for s in per_sequence_shapes)
+    observed_min = voxel_counts[0]
+    observed_max = voxel_counts[-1]
+    observed_opt = voxel_counts[len(voxel_counts) // 2]
+
+    # Expand TRT dynamic profile to include observed first+last frame shapes.
+    opt.min_num_voxels = min(opt.min_num_voxels, observed_min)
+    opt.max_num_voxels = max(opt.max_num_voxels, observed_max)
+    opt.opt_num_voxels = min(max(opt.opt_num_voxels, opt.min_num_voxels), opt.max_num_voxels)
+
+    print(
+        'TensorRT voxel profile after dataset sampling: '
+        f'min={opt.min_num_voxels}, opt={opt.opt_num_voxels}, max={opt.max_num_voxels} '
+        f'(observed median={observed_opt})'
+    )
+
+
 def _build_trt_inputs(opt, torch_tensorrt):
     return [
         torch_tensorrt.Input(
@@ -104,16 +197,38 @@ def _try_script_module(module, module_name: str) -> Optional[torch.jit.ScriptMod
         return None
 
 
-def _prepare_torchscript_module(adapter, opt):
+def _prepare_torchscript_module(adapter, opt, hypes):
+    # Try Scripting first if enabled
     if opt.try_script_first:
         scripted_adapter = _try_script_module(adapter, 'adapter')
         if scripted_adapter is not None:
             return scripted_adapter
+        print("Scripting failed, falling back to tracing...")
 
-    raise RuntimeError(
-        'TorchScript scripting failed for adapter and trace fallback is disabled. '
-        'Please make the model/adapter scriptable to continue.'
-    )
+    # Tracing fallback with real validation data (1 sample per sequence for shape collection).
+    print('Collecting trace shapes from validation dataset...')
+    dataset, per_sequence_shapes = _collect_validation_shapes(hypes)
+    _print_shape_summary(per_sequence_shapes)
+    _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes)
+
+    trace_idx = _select_trace_dataset_index(per_sequence_shapes, opt)
+    print(f'Tracing the adapter using validation dataset index: {trace_idx}')
+    trace_sample = dataset[trace_idx]
+    trace_batch = dataset.collate_batch_test([trace_sample])
+    trace_batch = train_utils.to_device(trace_batch, torch.device('cuda'))
+    trace_inputs = _extract_model_inputs_from_batch(trace_batch)
+
+    try:
+        # Trace the model
+        traced_adapter = torch.jit.trace(
+            adapter, 
+            trace_inputs
+        )
+        print("Successfully traced the adapter.")
+        return traced_adapter
+    except Exception as e:
+        print(f"Tracing failed: {e}")
+        raise RuntimeError("Both scripting and tracing failed. Check model for incompatible ops.")
 
 
 def main():
@@ -141,7 +256,7 @@ def main():
 
     print('Preparing TorchScript adapter')
     adapter = TRTInputAdapter(model).to('cuda').eval()
-    scripted = _prepare_torchscript_module(adapter, opt)
+    scripted = _prepare_torchscript_module(adapter, opt, hypes)
 
     enabled_precisions = {torch.float16} if opt.precision == 'fp16' else {torch.float32}
     trt_inputs = _build_trt_inputs(opt, torch_tensorrt)
