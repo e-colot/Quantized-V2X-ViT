@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from typing import Dict
 
 
 class BaseBEVBackbone(nn.Module):
@@ -93,9 +92,7 @@ class BaseBEVBackbone(nn.Module):
 
         self.num_bev_features = c_in
 
-    def forward(self, data_dict: Dict[str, torch.Tensor]):
-        spatial_features = data_dict['spatial_features']
-
+    def forward(self, spatial_features):
         ups = []
         #ret_dict = {}
         x = spatial_features
@@ -119,5 +116,5 @@ class BaseBEVBackbone(nn.Module):
         if len(self.deblocks) > len(self.blocks):
             x = self.deblocks[-1](x)
 
-        data_dict['spatial_features_2d'] = x
-        return data_dict
+        spatial_features_2d = x
+        return spatial_features_2d

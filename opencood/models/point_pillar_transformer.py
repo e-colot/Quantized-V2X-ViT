@@ -9,7 +9,7 @@ from opencood.models.sub_modules.downsample_conv import DownsampleConv
 from opencood.models.sub_modules.naive_compress import NaiveCompressor
 from opencood.models.fuse_modules.v2xvit_basic import V2XTransformer
 
-from typing import Dict, List
+from typing import List
 
 
 class PointPillarTransformer(nn.Module):
@@ -72,28 +72,17 @@ class PointPillarTransformer(nn.Module):
         for p in self.reg_head.parameters():
             p.requires_grad = False
 
-    def forward(self, data_dict: Dict[str, torch.Tensor], processed_lidar: Dict[str, torch.Tensor]):
-        voxel_features = processed_lidar['voxel_features']
-        voxel_coords = processed_lidar['voxel_coords']
-        voxel_num_points = processed_lidar['voxel_num_points']
-        record_len = data_dict['record_len']
-        spatial_correction_matrix = data_dict['spatial_correction_matrix']
+    def forward(self, voxel_features, voxel_coords, voxel_num_points, record_len, 
+                spatial_correction_matrix, prior_encoding):
 
         # B, max_cav, 3(dt dv infra), 1, 1
-        prior_encoding =\
-            data_dict['prior_encoding'].unsqueeze(-1).unsqueeze(-1)
+        prior_encoding =prior_encoding.unsqueeze(-1).unsqueeze(-1)
 
-        batch_dict = {'voxel_features': voxel_features,
-                      'voxel_coords': voxel_coords,
-                      'voxel_num_points': voxel_num_points,
-                      'record_len': record_len}
         # n, 4 -> n, c
-        batch_dict = self.pillar_vfe(batch_dict)
+        pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
         # n, c -> N, C, H, W
-        batch_dict = self.scatter(batch_dict)
-        batch_dict = self.backbone(batch_dict)
-
-        spatial_features_2d = batch_dict['spatial_features_2d']
+        spatial_features = self.scatter(voxel_coords, record_len, pillar_features)
+        spatial_features_2d = self.backbone(spatial_features)
         # downsample feature to reduce memory
         if self.shrink_flag:
             spatial_features_2d = self.shrink_conv(spatial_features_2d)

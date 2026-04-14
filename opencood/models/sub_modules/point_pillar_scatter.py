@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from typing import Dict
 
 
 class PointPillarScatter(nn.Module):
@@ -18,10 +17,7 @@ class PointPillarScatter(nn.Module):
         
         assert self.nz == 1
 
-    def forward(self, batch_dict: Dict[str, torch.Tensor]):
-        pillar_features = batch_dict['pillar_features']  # (N, C)
-        coords = batch_dict['voxel_coords']  # (N, 4)
-        record_len = batch_dict['record_len']
+    def forward(self, voxel_coords, record_len, pillar_features):
 
         device = pillar_features.device
         dtype = pillar_features.dtype
@@ -32,16 +28,16 @@ class PointPillarScatter(nn.Module):
             upper_batch_bound = record_len.shape[0] * self.max_cav
         else:
             raise NotImplementedError
-            # upper_batch_bound = coords[:, 0].max().int().item() + 1
+            # upper_batch_bound = voxel_coords[:, 0].max().int().item() + 1
 
         # Each pillar is mapped to a unique position in a flattened (B * H * W) grid.
-        # coords[:, 0] is batch_idx,
-        # coords[:, 2] is y,
-        # coords[:, 3] is x.
-        # (nz is 1, so coords[:, 1] is ignored)
-        spatial_indices = (coords[:, 0].to(torch.int64) * (self.nx * self.ny) +
-                          coords[:, 2].to(torch.int64) * self.nx +
-                          coords[:, 3].to(torch.int64))
+        # voxel_coords[:, 0] is batch_idx,
+        # voxel_coords[:, 2] is y,
+        # voxel_coords[:, 3] is x.
+        # (nz is 1, so voxel_coords[:, 1] is ignored)
+        spatial_indices = (voxel_coords[:, 0].to(torch.int64) * (self.nx * self.ny) +
+                          voxel_coords[:, 2].to(torch.int64) * self.nx +
+                          voxel_coords[:, 3].to(torch.int64))
 
         batch_spatial_features = torch.zeros((upper_batch_bound, self.num_bev_features, self.nx * self.ny),
             dtype=dtype, device=device)
@@ -56,5 +52,4 @@ class PointPillarScatter(nn.Module):
             self.num_bev_features, upper_batch_bound, self.ny, self.nx
         ).permute(1, 0, 2, 3).contiguous()
 
-        batch_dict['spatial_features'] = batch_spatial_features
-        return batch_dict
+        return batch_spatial_features

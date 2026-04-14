@@ -5,7 +5,6 @@ Pillar VFE, credits to OpenPCDet.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict
 
 
 class PFNLayer(nn.Module):
@@ -110,12 +109,9 @@ class PillarVFE(nn.Module):
                                device=actual_num.device).view(max_num_shape)
         paddings_indicator = actual_num.int() > max_num
         return paddings_indicator
+    
+    def forward(self, voxel_features, voxel_coords, voxel_num_points):
 
-    def forward(self, batch_dict: Dict[str, torch.Tensor]):
-
-        voxel_features, voxel_num_points, coords = \
-            batch_dict['voxel_features'], batch_dict['voxel_num_points'], \
-            batch_dict['voxel_coords']
         points_mean = \
             voxel_features[:, :, :3].sum(dim=1, keepdim=True) / \
             voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
@@ -123,13 +119,13 @@ class PillarVFE(nn.Module):
 
         f_center = torch.zeros_like(voxel_features[:, :, :3])
         f_center[:, :, 0] = voxel_features[:, :, 0] - (
-                coords[:, 3].to(voxel_features.dtype).unsqueeze(
+                voxel_coords[:, 3].to(voxel_features.dtype).unsqueeze(
                     1) * self.voxel_x + self.x_offset)
         f_center[:, :, 1] = voxel_features[:, :, 1] - (
-                coords[:, 2].to(voxel_features.dtype).unsqueeze(
+                voxel_coords[:, 2].to(voxel_features.dtype).unsqueeze(
                     1) * self.voxel_y + self.y_offset)
         f_center[:, :, 2] = voxel_features[:, :, 2] - (
-                coords[:, 1].to(voxel_features.dtype).unsqueeze(
+                voxel_coords[:, 1].to(voxel_features.dtype).unsqueeze(
                     1) * self.voxel_z + self.z_offset)
 
         if self.use_absolute_xyz:
@@ -151,5 +147,4 @@ class PillarVFE(nn.Module):
         for pfn in self.pfn_layers:
             features = pfn(features)
         features = features.squeeze()
-        batch_dict['pillar_features'] = features
-        return batch_dict
+        return features

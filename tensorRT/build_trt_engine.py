@@ -57,18 +57,11 @@ class TRTInputAdapter(torch.nn.Module):
             psm: Classification predictions (raw, pre-post-processing)
             rm: Regression predictions (raw, pre-post-processing)
         """
-        processed_lidar = {
-            'voxel_features': voxel_features,
-            'voxel_coords': voxel_coords,
-            'voxel_num_points': voxel_num_points}
-        
-        data_dict = {'record_len': record_len,
-            'prior_encoding': prior_encoding,
-            'spatial_correction_matrix': spatial_correction_matrix}
 
         # Forward through: pillar_vfe -> scatter -> backbone -> fusion -> heads
         # (no post-processing applied here)
-        output_dict = self.model(data_dict, processed_lidar)
+        output_dict = self.model(voxel_features, voxel_coords, voxel_num_points, record_len, 
+                spatial_correction_matrix, prior_encoding)
         # Return only the head outputs (classification and regression)
         # Post-processing happens in Python after TensorRT inference
         return output_dict['psm'], output_dict['rm']
