@@ -105,7 +105,7 @@ class PillarVFE(nn.Module):
         max_num_shape = [-1 if i == (axis + 1) else 1 for i in range(len(actual_num.shape))]
         max_num = torch.arange(max_num,
                                dtype=torch.int,
-                               device=actual_num.device).view(max_num_shape)
+                               device='cuda').view(max_num_shape)
         paddings_indicator = actual_num.int() > max_num
         return paddings_indicator
     

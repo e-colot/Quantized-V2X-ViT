@@ -40,8 +40,8 @@ class Matcher(nn.Module):
             cur_scores_list = [s for s in cur_scores_list if len(s) > 0]
             if len(cur_scores_list) == 0:
                 clusters_batch.append([torch.Tensor([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.57]).
-                                      to(torch.device('cuda:0')).view(1, 7)])
-                scores_batch.append([torch.Tensor([0.01]).to(torch.device('cuda:0')).view(-1)])
+                                      to('cuda').view(1, 7)])
+                scores_batch.append([torch.Tensor([0.01]).to('cuda').view(-1)])
                 continue
 
             pred_boxes_cat = torch.cat(cur_boxes_list, dim=0)
@@ -99,7 +99,7 @@ class Matcher(nn.Module):
                 s_fused = 0
                 for i, ss in enumerate(s_sorted):
                     s_fused += ss ** (i + 1)
-                s_fused = torch.tensor([min(s_fused, 1.0)], device=s.device)
+                s_fused = torch.tensor([min(s_fused, 1.0)], device='cuda')
                 scores_fused.append(s_fused)
 
         assert len(boxes_fused) > 0

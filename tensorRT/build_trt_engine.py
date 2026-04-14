@@ -121,22 +121,13 @@ def main():
     assert opt.fusion_method in ['late', 'early', 'intermediate']
     assert opt.precision in ['fp16', 'fp32']
 
-    try:
-        torch_tensorrt = importlib.import_module('torch_tensorrt')
-    except ImportError as exc:
-        raise ImportError(
-            'torch_tensorrt is required for direct Torch->TensorRT conversion. '
-            'Install it in your environment before running this script.'
-        ) from exc
+    torch_tensorrt = importlib.import_module('torch_tensorrt')
 
-    if not torch.cuda.is_available():
-        raise RuntimeError('CUDA is required to build a TensorRT engine.')
-
-    device = torch.device(opt.device)
+    device = torch.device('cuda')
 
     print('Loading OpenCOOD config and model...')
     hypes = yaml_utils.load_yaml(None, opt)
-    model = train_utils.create_model(hypes).to(device)
+    model = train_utils.create_model(hypes).to('cuda')
     _, model = train_utils.load_saved_model(opt.model_dir, model)
     model.eval()
 
@@ -149,7 +140,7 @@ def main():
             print('Whole-model scripting failed; continuing with eager model.')
 
     print('Preparing TorchScript adapter')
-    adapter = TRTInputAdapter(model).to(device).eval()
+    adapter = TRTInputAdapter(model).to('cuda').eval()
     scripted = _prepare_torchscript_module(adapter, opt)
 
     enabled_precisions = {torch.float16} if opt.precision == 'fp16' else {torch.float32}

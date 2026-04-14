@@ -33,7 +33,7 @@ class Communication(nn.Module):
         gaussian_kernel = 1 / (2 * np.pi * sigma) * np.exp(-(np.square(x) + np.square(y)) / (2 * np.square(sigma)))
 
         self.gaussian_filter.weight.data = torch.Tensor(gaussian_kernel).to(
-            self.gaussian_filter.weight.device).unsqueeze(0).unsqueeze(0)
+            'cuda').unsqueeze(0).unsqueeze(0)
         self.gaussian_filter.bias.data.zero_()
 
     def forward(self, batch_confidence_maps, B):
@@ -59,15 +59,15 @@ class Communication(nn.Module):
                 K = int(H * W * random.uniform(0, 1))
                 communication_maps = communication_maps.reshape(L, H * W)
                 _, indices = torch.topk(communication_maps, k=K, sorted=False)
-                communication_mask = torch.zeros_like(communication_maps).to(communication_maps.device)
-                ones_fill = torch.ones(L, K, dtype=communication_maps.dtype, device=communication_maps.device)
+                communication_mask = torch.zeros_like(communication_maps).to('cuda')
+                ones_fill = torch.ones(L, K, dtype=communication_maps.dtype, device='cuda')
                 communication_mask = torch.scatter(communication_mask, -1, indices, ones_fill).reshape(L, 1, H, W)
             elif self.threshold:
-                ones_mask = torch.ones_like(communication_maps).to(communication_maps.device)
-                zeros_mask = torch.zeros_like(communication_maps).to(communication_maps.device)
+                ones_mask = torch.ones_like(communication_maps).to('cuda')
+                zeros_mask = torch.zeros_like(communication_maps).to('cuda')
                 communication_mask = torch.where(communication_maps > self.threshold, ones_mask, zeros_mask)
             else:
-                communication_mask = torch.ones_like(communication_maps).to(communication_maps.device)
+                communication_mask = torch.ones_like(communication_maps).to('cuda')
 
             communication_rate = communication_mask.sum() / (L * H * W)
             # Ego
@@ -149,7 +149,7 @@ class Where2comm(nn.Module):
                 # 1. Communication (mask the features)
                 if i == 0:
                     if self.fully:
-                        communication_rates = torch.tensor(1).to(x.device)
+                        communication_rates = torch.tensor(1).to('cuda')
                     else:
                         # Prune
                         batch_confidence_maps = self.regroup(psm_single, record_len)
@@ -187,7 +187,7 @@ class Where2comm(nn.Module):
         else:
             # 1. Communication (mask the features)
             if self.fully:
-                communication_rates = torch.tensor(1).to(x.device)
+                communication_rates = torch.tensor(1).to('cuda')
             else:
                 # Prune
                 batch_confidence_maps = self.regroup(psm_single, record_len)

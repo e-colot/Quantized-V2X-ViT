@@ -88,7 +88,7 @@ class Attention(nn.Module):
     def forward(self, x, mask=None):
         # x shape: b, l, h, w, w_h, w_w, c
         batch, agent_size, height, width, window_height, window_width, _, device, h \
-            = *x.shape, x.device, self.heads
+            = *x.shape, 'cuda', self.heads
 
         # flatten
         x = rearrange(x, 'b l x y w1 w2 d -> (b x y) (l w1 w2) d')
@@ -301,11 +301,11 @@ if __name__ == "__main__":
             'mask': True
             }
     block = SwapFusionEncoder(args)
-    block.cuda()
+    block.to('cuda')
     test_data = torch.rand(1, 4, 512, 32, 32)
-    test_data = test_data.cuda()
+    test_data = test_data.to('cuda')
     mask = torch.ones(1, 32, 32, 1, 4)
-    mask = mask.cuda()
+    mask = mask.to('cuda')
 
     output = block(test_data, mask)
     print(output)

@@ -142,7 +142,7 @@ class ConvGRU(nn.Module):
             raise NotImplementedError()
         else:
             hidden_state = self._init_hidden(batch_size=input_tensor.size(0),
-                                             device=input_tensor.device,
+                                             device='cuda',
                                              dtype=input_tensor.dtype)
 
         layer_output_list = []
@@ -175,11 +175,11 @@ class ConvGRU(nn.Module):
 
         return layer_output_list, last_state_list
 
-    def _init_hidden(self, batch_size, device=None, dtype=None):
+    def _init_hidden(self, batch_size, device='cuda', dtype=None):
         init_states = []
         for i in range(self.num_layers):
             init_states.append(
-                self.cell_list[i].init_hidden(batch_size).to(device).to(dtype))
+                self.cell_list[i].init_hidden(batch_size).to('cuda').to(dtype))
         return init_states
 
     @staticmethod

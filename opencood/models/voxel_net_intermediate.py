@@ -85,7 +85,7 @@ class VoxelNetIntermediate(nn.Module):
         dim = sparse_features.shape[-1]
 
         dense_feature = Variable(
-            torch.zeros(dim, self.N, self.D, self.H, self.W).cuda())
+            torch.zeros(dim, self.N, self.D, self.H, self.W).to('cuda'))
 
         dense_feature[:, coords[:, 0], coords[:, 1], coords[:, 2],
         coords[:, 3]] = sparse_features.transpose(0, 1)
@@ -121,7 +121,7 @@ class VoxelNetIntermediate(nn.Module):
             padding_len = 5 - feature_shape[0]
             padding_tensor = torch.zeros(padding_len, feature_shape[1],
                                          feature_shape[2], feature_shape[3])
-            padding_tensor = padding_tensor.to(split_feature.device)
+            padding_tensor = padding_tensor.to('cuda')
 
             split_feature = torch.cat([split_feature, padding_tensor],
                                       dim=0)

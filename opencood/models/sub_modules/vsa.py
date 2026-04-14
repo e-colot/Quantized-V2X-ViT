@@ -136,7 +136,7 @@ class VoxelSetAbstraction(nn.Module):
         else:
             raise NotImplementedError
 
-        keypoints_batch = torch.randn((batch_size, self.model_cfg['num_keypoints'], 4), device=src_points.device)
+        keypoints_batch = torch.randn((batch_size, self.model_cfg['num_keypoints'], 4), device='cuda')
         keypoints_batch[..., 0] = keypoints_batch[..., 0] * 140
         keypoints_batch[..., 1] = keypoints_batch[..., 0] * 40
         # points with height flag 10 are padding/invalid, for later filtering
@@ -191,7 +191,7 @@ class VoxelSetAbstraction(nn.Module):
             dets_list = batch_dict['det_boxes']
             max_len = max([len(dets) for dets in dets_list])
             boxes = torch.zeros((len(dets_list), max_len, 7), dtype=dets_list[0].dtype,
-                                device=dets_list[0].device)
+                                device='cuda')
             for i, dets in enumerate(dets_list):
                 if len(dets)==0:
                     continue
@@ -219,7 +219,7 @@ class VoxelSetAbstraction(nn.Module):
         batch_size, num_keypoints, _ = keypoints.shape
 
         new_xyz = keypoints[kpt_mask]
-        new_xyz_batch_cnt = torch.tensor([(mask).sum() for mask in kpt_mask], device=new_xyz.device).int()
+            new_xyz_batch_cnt = torch.tensor([(mask).sum() for mask in kpt_mask], device='cuda').int()
 
         if 'raw_points' in self.model_cfg['features_source']:
             raw_points = batch_dict['origin_lidar']

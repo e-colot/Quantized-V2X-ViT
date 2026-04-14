@@ -19,7 +19,7 @@ class PointPillarScatter(nn.Module):
 
     def forward(self, voxel_coords, record_len, pillar_features):
 
-        device = pillar_features.device
+        device = 'cuda'
         dtype = pillar_features.dtype
 
         # In export mode we avoid tensor->python scalar conversions by using

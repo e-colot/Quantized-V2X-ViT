@@ -97,7 +97,7 @@ def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: to
     # To reduce the computation, we only need to calculate the
     # mask for the first channel.
     # (B,L,1,H,W)
-    x = torch.ones((B, L, 1, H, W), dtype=correction_matrix.dtype, device=correction_matrix.device)
+    x = torch.ones((B, L, 1, H, W), dtype=correction_matrix.dtype, device='cuda')
     # (B*L,1,H,W)
     roi_mask = warp_affine(x.reshape(-1, 1, H, W), correction_matrix,
                            dsize=(H, W), mode="bilinear") # was mode='nearest'
@@ -299,7 +299,7 @@ def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[i
     # source and destination sizes
     src_h, src_w = dsize_src
     dst_h, dst_w = dsize_dst
-    device = dst_pix_trans_src_pix.device
+    device = 'cuda'
     dtype = dst_pix_trans_src_pix.dtype
     # compute the transformation pixel/norm for src/dst
     src_norm_trans_src_pix = normal_transform_pixel(src_h, src_w, device,
@@ -331,14 +331,14 @@ def get_rotation_matrix2d(M: torch.Tensor, dsize: Tuple[int, int]):
     """
     H, W = dsize
     B = M.shape[0]
-    center = torch.tensor([W / 2, H / 2], dtype=M.dtype, device=M.device).unsqueeze(0)
-    shift_m = eye_like(3, B, device=M.device, dtype=M.dtype)
+    center = torch.tensor([W / 2, H / 2], dtype=M.dtype, device='cuda').unsqueeze(0)
+    shift_m = eye_like(3, B, device='cuda', dtype=M.dtype)
     shift_m[:, :2, 2] = center
 
-    shift_m_inv = eye_like(3, B, device=M.device, dtype=M.dtype)
+    shift_m_inv = eye_like(3, B, device='cuda', dtype=M.dtype)
     shift_m_inv[:, :2, 2] = -center
 
-    rotat_m = eye_like(3, B, device=M.device, dtype=M.dtype)
+    rotat_m = eye_like(3, B, device='cuda', dtype=M.dtype)
     rotat_m[:, :2, :2] = M[:, :2, :2]
     affine_m = shift_m @ rotat_m @ shift_m_inv
     return affine_m[:, :2, :]  # Bx2x3
@@ -376,7 +376,7 @@ def convert_affinematrix_to_homography(A):
     B = A.shape[0]
 
     # Create the row [0.0, 0.0, 1.0]: (B, 1, 3)
-    new_row = torch.tensor([[[0.0, 0.0, 1.0]]], device=A.device, dtype=A.dtype)
+    new_row = torch.tensor([[[0.0, 0.0, 1.0]]], device='cuda', dtype=A.dtype)
     new_row = new_row.expand(B, -1, -1)
     
     # Concatenate along the height dimension (dim=1)
@@ -407,7 +407,7 @@ def _gather_from_hw(src, x_idx, y_idx):
     # -> split it in different steps
 
     batch_size, seq_len, _ = src_flat.shape
-    device = src_flat.device
+    device = 'cuda'
     
     # Create 1D indices
     # We use .view() to place them in the correct dimensions for broadcasting
@@ -454,7 +454,7 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tup
 
     B, C, H, W = src.shape
     H_out, W_out = dsize
-    device = src.device
+    device = 'cuda'
     grid_dtype = theta.dtype
 
     if align_corners:

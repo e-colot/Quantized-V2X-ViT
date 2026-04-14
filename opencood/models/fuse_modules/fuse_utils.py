@@ -26,7 +26,7 @@ def regroup(dense_feature: torch.Tensor, record_len: torch.Tensor, max_len: int)
     
     B = record_len.shape[0]
     L = max_len
-    device = dense_feature.device
+    device = 'cuda'
     dtype = dense_feature.dtype
 
     # Create the grid mask to identify valid slots in the BxL output
