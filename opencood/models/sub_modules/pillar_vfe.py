@@ -102,8 +102,7 @@ class PillarVFE(nn.Module):
     @staticmethod
     def get_paddings_indicator(actual_num: torch.Tensor, max_num: int, axis: int = 0):
         actual_num = torch.unsqueeze(actual_num, axis + 1)
-        max_num_shape = [1] * len(actual_num.shape)
-        max_num_shape[axis + 1] = -1
+        max_num_shape = [-1 if i == (axis + 1) else 1 for i in range(len(actual_num.shape))]
         max_num = torch.arange(max_num,
                                dtype=torch.int,
                                device=actual_num.device).view(max_num_shape)

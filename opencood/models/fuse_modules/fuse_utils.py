@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import torch
-from typing import List
 
-def regroup(dense_feature: torch.Tensor, record_len: List[int], max_len: int):
+def regroup(dense_feature: torch.Tensor, record_len: torch.Tensor, max_len: int):
     """
     Regroup the data based on the record_len.
 
@@ -24,9 +23,6 @@ def regroup(dense_feature: torch.Tensor, record_len: List[int], max_len: int):
         B, L
     """
     N, C, H, W = dense_feature.shape
-    
-    if not isinstance(record_len, torch.Tensor):
-        record_len = torch.tensor(record_len, device=dense_feature.device)
     
     B = record_len.shape[0]
     L = max_len

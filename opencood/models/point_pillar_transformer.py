@@ -91,10 +91,8 @@ class PointPillarTransformer(nn.Module):
             spatial_features_2d = self.naive_compressor(spatial_features_2d)
         # N, C, H, W -> B,  L, C, H, W
 
-        record_len_list: List[int] = record_len.tolist()
-
         regroup_feature, mask = regroup(spatial_features_2d,
-                                        record_len_list,
+                                        record_len,
                                         self.max_cav)
         # prior encoding added
         prior_encoding = prior_encoding.repeat(1, 1, 1,
