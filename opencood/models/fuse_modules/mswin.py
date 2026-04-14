@@ -55,20 +55,15 @@ class BaseWindowAttention(nn.Module):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q_in, k_in, v_in = qkv
         c_head = q_in.shape[-1] // m
+     
+        q = q_in.view(b, l, new_h, wh, new_w, ww, m, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        q = q.view(b, l, m, new_h * new_w, wh * ww, c_head)
 
-        # 2. Window Partition (TRT-safe rearrange alternative)
-        # b l (new_h wh) (new_w ww) (m c) -> b l m (new_h new_w) (wh ww) c
-        def partition(t):
-            # Split dims
-            t = t.view(b, l, new_h, wh, new_w, ww, m, c_head)
-            # Permute: b(0), l(1), m(6), new_h(2), new_w(4), wh(3), ww(5), c_head(7)
-            t = t.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-            # Merge: b, l, m, (new_h*new_w), (wh*ww), c_head
-            return t.view(b, l, m, new_h * new_w, wh * ww, c_head)
+        k = k_in.view(b, l, new_h, wh, new_w, ww, m, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        k = k.view(b, l, m, new_h * new_w, wh * ww, c_head)
 
-        q = partition(q_in)
-        k = partition(k_in)
-        v = partition(v_in)
+        v = v_in.view(b, l, new_h, wh, new_w, ww, m, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        v = v.view(b, l, m, new_h * new_w, wh * ww, c_head)
 
         # 3. Attention Calculation
         # TensorRT likes matmul better than einsum for these specific dims
@@ -119,7 +114,7 @@ class PreNormedPyramidWindowAttention(nn.Module):
         self.pwin = PyramidWindowAttention(dim, heads, dim_heads, drop_out, window_size,
                                            relative_pos_embedding, fuse_method=fuse_method)
         
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.prenorm(x)
         x = self.pwin(x)
         return x
@@ -134,6 +129,7 @@ class PyramidWindowAttention(nn.Module):
         assert isinstance(heads, list)
         assert isinstance(dim_heads, list)
         assert len(dim_heads) == len(heads)
+        assert fuse_method in ['naive', 'split_attn']
 
         self.pwmsa = nn.ModuleList([])
 
@@ -144,21 +140,23 @@ class PyramidWindowAttention(nn.Module):
                                                   drop_out,
                                                   ws,
                                                   relative_pos_embedding))
-        self.fuse_mehod = fuse_method
+        self.fuse_method = fuse_method
         if fuse_method == 'split_attn':
             self.split_attn = SplitAttn(256)
 
-    def forward(self, x):
-        output = None
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = torch.zeros_like(x)
         # naive fusion will just sum up all window attention output and do a
         # mean
-        if self.fuse_mehod == 'naive':
+        if self.fuse_method == 'naive':
             for wmsa in self.pwmsa:
-                output = wmsa(x) if output is None else output + wmsa(x)
+                output = output + wmsa(x)
             return output / len(self.pwmsa)
 
-        elif self.fuse_mehod == 'split_attn':
+        else:
+            # self.fuse_method == 'split_attn'
             window_list = []
             for wmsa in self.pwmsa:
                 window_list.append(wmsa(x))
             return self.split_attn(window_list)
+        

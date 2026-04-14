@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import List
 
 
 class RadixSoftmax(nn.Module):
@@ -39,7 +40,7 @@ class SplitAttn(nn.Module):
 
         self.rsoftmax = RadixSoftmax(3, 1)
 
-    def forward(self, window_list):
+    def forward(self, window_list: List[torch.Tensor]) -> torch.Tensor:
         # window list: [(B, L, H, W, C) * 3]
         assert len(window_list) == 3, 'only 3 windows are supported'
 

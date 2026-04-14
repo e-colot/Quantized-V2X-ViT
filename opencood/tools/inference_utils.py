@@ -61,7 +61,12 @@ def inference_early_fusion(batch_data, model, dataset):
     output_dict = OrderedDict()
     cav_content = batch_data['ego']
 
-    output_dict['ego'] = model(cav_content)
+    data_dict = {'record_len': cav_content['record_len'],
+                 'prior_encoding': cav_content['prior_encoding'],
+                 'spatial_correction_matrix': cav_content['spatial_correction_matrix']}
+    processed_lidar = cav_content['processed_lidar']
+
+    output_dict['ego'] = model(data_dict, processed_lidar)
 
     pred_box_tensor, pred_score, gt_box_tensor = \
         dataset.post_process(batch_data,

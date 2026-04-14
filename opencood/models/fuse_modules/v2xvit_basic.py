@@ -13,7 +13,7 @@ class STTF(nn.Module):
     def __init__(self, args):
         super(STTF, self).__init__()
         self.discrete_ratio = args['voxel_size'][0]
-        self.downsample_rate = args['downsample_rate']
+        self.downsample_rate = float(args['downsample_rate'])
 
     def forward(self, x, mask, spatial_correction_matrix):
         x = x.permute(0, 1, 4, 2, 3)
@@ -115,9 +115,14 @@ class V2XFusionBlock(nn.Module):
                                             'fusion_method'])]))
 
     def forward(self, x, mask, prior_encoding):
-        for cav_attn, pwindow_attn in self.layers:
-            x = cav_attn(x, mask=mask, prior_encoding=prior_encoding) + x
-            x = pwindow_attn(x) + x
+        # for cav_attn, pwindow_attn in self.layers:
+        #     x = cav_attn(x, mask=mask, prior_encoding=prior_encoding) + x
+        #     x = pwindow_attn(x) + x
+        # return x
+
+        for layer in self.layers:
+            x = layer[0](x, mask=mask, prior_encoding=prior_encoding) + x
+            x = layer[1](x) + x
         return x
 
 
@@ -134,7 +139,7 @@ class V2XTEncoder(nn.Module):
         mlp_dim = feed_config['mlp_dim']
         dropout = feed_config['dropout']
 
-        self.downsample_rate = args['sttf']['downsample_rate']
+        self.downsample_rate = float(args['sttf']['downsample_rate'])
         self.discrete_ratio = args['sttf']['voxel_size'][0]
         self.use_roi_mask = args['use_roi_mask']
         self.use_RTE = cav_att_config['use_RTE']
@@ -172,14 +177,14 @@ class V2XTEncoder(nn.Module):
             x = self.rte(x, dt)
         x = self.sttf(x, mask, spatial_correction_matrix)
         com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(
-            3) if not self.use_roi_mask else get_roi_and_cav_mask(x.shape,
+            3) if not self.use_roi_mask else get_roi_and_cav_mask(list(x.shape),
                                                                   mask,
                                                                   spatial_correction_matrix,
                                                                   self.discrete_ratio,
                                                                   self.downsample_rate)
-        for attn, ff in self.layers:
-            x = attn(x, mask=com_mask, prior_encoding=prior_encoding)
-            x = ff(x) + x
+        for layer in self.layers:
+            x = layer[0](x, mask=com_mask, prior_encoding=prior_encoding)
+            x = layer[1](x) + x
         return x
 
 

@@ -108,14 +108,16 @@ class HGTCavAttention(nn.Module):
         return w_att, w_msg
 
     def to_out(self, x, types):
-        out_batch = []
-        for b in range(x.shape[0]):
-            out_list = []
-            for i in range(x.shape[-2]):
-                out_list.append(
-                    self.a_linears[types[b, i]](x[b, :, :, i, :].unsqueeze(2)))
-            out_batch.append(torch.cat(out_list, dim=2).unsqueeze(0))
-        out = torch.cat(out_batch, dim=0)
+        # x shape: (B, H, W, L, C)
+        B, H, W, L, C = x.shape
+
+        out = torch.zeros_like(x)
+        for t_idx, linear_layer in enumerate(self.a_linears):
+            # Create a mask for specific agent
+            mask = (types == t_idx).view(B, 1, 1, L, 1)
+            
+            out += linear_layer(x) * mask
+
         return out
 
     def forward(self, x, mask, prior_encoding):

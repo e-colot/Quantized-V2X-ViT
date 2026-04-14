@@ -9,6 +9,8 @@ from opencood.models.sub_modules.downsample_conv import DownsampleConv
 from opencood.models.sub_modules.naive_compress import NaiveCompressor
 from opencood.models.fuse_modules.v2xvit_basic import V2XTransformer
 
+from typing import Dict, List
+
 
 class PointPillarTransformer(nn.Module):
     def __init__(self, args):
@@ -70,10 +72,10 @@ class PointPillarTransformer(nn.Module):
         for p in self.reg_head.parameters():
             p.requires_grad = False
 
-    def forward(self, data_dict):
-        voxel_features = data_dict['processed_lidar']['voxel_features']
-        voxel_coords = data_dict['processed_lidar']['voxel_coords']
-        voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
+    def forward(self, data_dict: Dict[str, torch.Tensor], processed_lidar: Dict[str, torch.Tensor]):
+        voxel_features = processed_lidar['voxel_features']
+        voxel_coords = processed_lidar['voxel_coords']
+        voxel_num_points = processed_lidar['voxel_num_points']
         record_len = data_dict['record_len']
         spatial_correction_matrix = data_dict['spatial_correction_matrix']
 
@@ -99,8 +101,11 @@ class PointPillarTransformer(nn.Module):
         if self.compression:
             spatial_features_2d = self.naive_compressor(spatial_features_2d)
         # N, C, H, W -> B,  L, C, H, W
+
+        record_len_list: List[int] = record_len.tolist()
+
         regroup_feature, mask = regroup(spatial_features_2d,
-                                        record_len,
+                                        record_len_list,
                                         self.max_cav)
         # prior encoding added
         prior_encoding = prior_encoding.repeat(1, 1, 1,

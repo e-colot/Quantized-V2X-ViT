@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import torch
+from typing import List
 
-def regroup(dense_feature, record_len, max_len):
+def regroup(dense_feature: torch.Tensor, record_len: List[int], max_len: int):
     """
     Regroup the data based on the record_len.
 

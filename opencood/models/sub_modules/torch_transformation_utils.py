@@ -2,15 +2,16 @@
 torch_transformation_utils.py
 """
 import os
-from typing import Tuple
+from typing import Tuple, List
 
 import torch
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 
-def get_roi_and_cav_mask(shape, cav_mask, spatial_correction_matrix,
-                         discrete_ratio, downsample_rate):
+def get_roi_and_cav_mask(shape: List[int], cav_mask: torch.Tensor, 
+                         spatial_correction_matrix: torch.Tensor,
+                         discrete_ratio: float, downsample_rate: float):
     """
     Get mask for the combination of cav_mask and rorated ROI mask.
     Parameters
@@ -75,7 +76,7 @@ def combine_roi_and_cav_mask(roi_mask, cav_mask):
     return com_mask
 
 
-def get_rotated_roi(shape, correction_matrix):
+def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: torch.Tensor) -> torch.Tensor:
     """
     Get rorated ROI mask.
 
@@ -110,7 +111,7 @@ def get_rotated_roi(shape, correction_matrix):
 
 
 def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: float,
-                                          downsample_rate: int):
+                                          downsample_rate: float):
     """
     Get disretized transformation matrix.
     Parameters
@@ -120,9 +121,9 @@ def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: 
         number.
     discrete_ratio : float
         Discrete ratio.
-    downsample_rate : int
+    downsample_rate : float
         downsample_rate
-        Warning: previously supported both float and int
+        Warning: previously supported both int and float
 
     Returns
     -------
@@ -227,15 +228,21 @@ def normal_transform_pixel(
     # height_denom = eps if height == 1 else height - 1.0
 
     # slight difference, allows to remove conditional statement
-    width_denom = width - 1.0 + eps
-    height_denom = height - 1.0 + eps
+    width_denom = float(width) - 1.0 + eps
+    height_denom = float(height) - 1.0 + eps
 
-    el_0_0 = torch.tensor(2.0/width_denom, device=device, dtype=dtype)
-    el_1_1 = torch.tensor(2.0/height_denom, device=device, dtype=dtype)
+    # constants
+    zero = torch.full([], 0.0, device=device, dtype=dtype)
+    neg_one = torch.full([], -1.0, device=device, dtype=dtype)
+    one = torch.full([], 1.0, device=device, dtype=dtype)
+    two = torch.tensor([2.0], device=device, dtype=dtype)
+
+    el_0_0 = two / width_denom
+    el_1_1 = two / height_denom
     
-    row0 = torch.stack([el_0_0, torch.tensor(0.0, device=device, dtype=dtype), torch.tensor(-1.0, device=device, dtype=dtype)])
-    row1 = torch.stack([torch.tensor(0.0, device=device, dtype=dtype), el_1_1, torch.tensor(-1.0, device=device, dtype=dtype)])
-    row2 = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=dtype)
+    row0 = torch.stack([el_0_0.squeeze(), zero, neg_one])
+    row1 = torch.stack([zero, el_1_1.squeeze(), neg_one])
+    row2 = torch.stack([zero, zero, one])
 
     # Stack into a 3x3
     tr_mat = torch.stack([row0, row1, row2], dim=0)
@@ -260,9 +267,15 @@ def eye_like(n: int, B: int, device: torch.device, dtype: torch.dtype):
     Returns:
        The identity matrix with the shape :math:`(B, n, n)`.
     """
-
-    identity = torch.eye(n, device=device, dtype=dtype)
-    return identity[None].repeat(B, 1, 1)
+    # Create a range [0, 1, ..., n-1]
+    range_n = torch.arange(n, device=device, dtype=dtype)
+    
+    # Use broadcasting to create a (n, n) boolean matrix where row_idx == col_idx
+    # range_n[:, None] is (n, 1), range_n[None, :] is (1, n)
+    identity = (range_n[:, None] == range_n[None, :]).to(dtype)
+    
+    # Expand/Repeat to batch size
+    return identity.unsqueeze(0).repeat(B, 1, 1)
 
 
 def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[int, int], dsize_dst: Tuple[int, int] = (-1, -1)):
@@ -281,7 +294,7 @@ def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[i
         dst_norm_trans_src_norm : torch.Tensor
             The normalized homography of shape :math:`(B, 3, 3)`.
     """
-    if dsize_dst == (-1, -1):
+    if dsize_dst[0] == -1 and dsize_dst[1] == -1:
         dsize_dst = dsize_src
     # source and destination sizes
     src_h, src_w = dsize_src
@@ -360,9 +373,14 @@ def convert_affinematrix_to_homography(A):
         H : torch.Tensor
             The homography matrix with shape of :math:`(B,3,3)`.
     """
-    H: torch.Tensor = torch.nn.functional.pad(A, [0, 0, 0, 1], "constant",
-                                              value=0.0)
-    H[..., -1, -1] += 1.0
+    B = A.shape[0]
+
+    # Create the row [0.0, 0.0, 1.0]: (B, 1, 3)
+    new_row = torch.tensor([[[0.0, 0.0, 1.0]]], device=A.device, dtype=A.dtype)
+    new_row = new_row.expand(B, -1, -1)
+    
+    # Concatenate along the height dimension (dim=1)
+    H = torch.cat([A, new_row], dim=1)
     return H
 
 
@@ -459,11 +477,11 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tup
 
         eps = 1e-14
 
-        denom_y = (H_out - 1.0) + eps
+        denom_y = (float(H_out) - 1.0) + eps
         step_y = 2.0 / denom_y
         ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - 1.0
 
-        denom_x = (W_out - 1.0) + eps
+        denom_x = (float(W_out) - 1.0) + eps
         step_x = 2.0 / denom_x
         xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - 1.0
 
@@ -679,7 +697,7 @@ class Test:
         correction_matrix = Test.load_raw_transformation_matrix2(5, 10)
         correction_matrix = torch.cat([correction_matrix, correction_matrix],
                                       dim=0)
-        mask = get_roi_and_cav_mask((B, L, H, W, C), cav_mask, 
+        mask = get_roi_and_cav_mask([B, L, H, W, C], cav_mask, 
                                     correction_matrix, 0.4, 4)
         plt.matshow(mask[0, :, :, 0, 0])
         plt.show()
