@@ -72,6 +72,59 @@ def _apply_rules(key: str, rules: dict) -> str:
     return new_key
 
 
+def _compose_tensor_sources(
+    source_state: Dict[str, torch.Tensor],
+    model_state: Dict[str, torch.Tensor],
+    rules: dict,
+) -> Tuple[Dict[str, torch.Tensor], List[str]]:
+    composed = {}
+    consumed_sources = []
+
+    for item in rules.get('compose_tensors', []):
+        target_pattern = item.get('target_pattern')
+        source_templates = item.get('source_templates', [])
+        op = item.get('op', 'stack')
+        dim = int(item.get('dim', 0))
+
+        if not target_pattern or not source_templates:
+            continue
+
+        target_regex = re.compile(target_pattern)
+
+        for target_key in model_state.keys():
+            match = target_regex.match(target_key)
+            if not match:
+                continue
+            if target_key in source_state:
+                continue
+
+            resolved_sources = [match.expand(template) for template in source_templates]
+            if not all(src in source_state for src in resolved_sources):
+                continue
+
+            tensors = [source_state[src] for src in resolved_sources]
+            if op == 'stack':
+                value = torch.stack(tensors, dim=dim)
+            elif op == 'cat':
+                value = torch.cat(tensors, dim=dim)
+            else:
+                continue
+
+            composed[target_key] = value
+            consumed_sources.extend(resolved_sources)
+
+    return composed, consumed_sources
+
+
+def _matches_any_regex(key: str, patterns: List[str]) -> bool:
+    for pattern in patterns:
+        if pattern is None:
+            continue
+        if re.search(pattern, key):
+            return True
+    return False
+
+
 def remap_checkpoint_for_model(
     checkpoint_state: Dict[str, torch.Tensor],
     model_state: Dict[str, torch.Tensor],
@@ -91,12 +144,18 @@ def remap_checkpoint_for_model(
         if new_key != old_key:
             renamed_pairs.append(f'{old_key} -> {new_key}')
 
+    composed, consumed_sources = _compose_tensor_sources(remapped, model_state, rules)
+    remapped.update(composed)
+    consumed_sources = set(consumed_sources)
+
     # Keep only keys that exist in model and have matching shape.
     compatible = {}
     shape_mismatch = []
     skipped_unknown = []
 
     for key, value in remapped.items():
+        if key in consumed_sources:
+            continue
         if key not in model_state:
             skipped_unknown.append(key)
             continue
@@ -107,18 +166,20 @@ def remap_checkpoint_for_model(
             continue
         compatible[key] = value
 
-    # Filter out new buffers that don't exist in old checkpoints (e.g., TensorRT optim buffers)
+    ignore_missing_key_patterns = rules.get('ignore_missing_keys_regex', [])
+
+    # Filter out new buffers that don't exist in old checkpoints using YAML-driven rules.
     new_buffers_to_exclude = {
-        k for k in model_state.keys() 
-        if k.endswith('.num_windows_tensor')  # TensorRT PyramidWindow buffer
+        k for k in model_state.keys()
+        if _matches_any_regex(k, ignore_missing_key_patterns)
     }
-    
+
     missing_in_checkpoint = [
-        k for k in model_state.keys() 
-        if k not in compatible 
+        k for k in model_state.keys()
+        if k not in compatible
         and k not in new_buffers_to_exclude
     ]
-    
+
     # Adjust total model keys to exclude new non-loadable buffers for accurate coverage calculation
     total_model_keys_loadable = len(model_state) - len(new_buffers_to_exclude)
 

@@ -9,30 +9,37 @@ from opencood.models.sub_modules.torch_transformation_utils import \
 from torch import nn
 
 
+import torch
+from torch import nn
+
 class STTF(nn.Module):
     def __init__(self, args):
         super(STTF, self).__init__()
-        self.discrete_ratio = args['voxel_size'][0]
-        self.downsample_rate = float(args['downsample_rate'])
+        # Register these as buffers to keep them as Tensors in the graph
+        self.register_buffer('discrete_ratio', torch.tensor(args['voxel_size'][0]))
+        self.register_buffer('downsample_rate', torch.tensor(float(args['downsample_rate'])))
 
     def forward(self, x, mask, spatial_correction_matrix):
+        # x shape: (B, L, H, W, C) -> (B, L, C, H, W)
         x = x.permute(0, 1, 4, 2, 3)
-        dist_correction_matrix = get_discretized_transformation_matrix(
-            spatial_correction_matrix, self.discrete_ratio,
-            self.downsample_rate)
-        # Only compensate non-ego vehicles
         B, L, C, H, W = x.shape
 
-        if L > 1:
-            T = get_transformation_matrix(
-                dist_correction_matrix[:, 1:, :, :].reshape(-1, 2, 3), (H, W))
-            cav_features = warp_affine(x[:, 1:, :, :, :].reshape(-1, C, H, W), T,
-                                       (H, W))
-            cav_features = cav_features.reshape(B, -1, C, H, W)
-            x = torch.cat([x[:, 0, :, :, :].unsqueeze(1), cav_features], dim=1)
-        else:
-            x = x[:, 0, :, :, :].unsqueeze(1)
-        x = x.permute(0, 1, 3, 4, 2)
+        dist_correction_matrix = get_discretized_transformation_matrix(
+            spatial_correction_matrix, 
+            self.discrete_ratio,
+            self.downsample_rate
+        )
+
+        matrices = dist_correction_matrix.reshape(-1, 2, 3)
+        T = get_transformation_matrix(matrices, (H, W))
+        
+        x_flat = x.reshape(-1, C, H, W)
+        x_warped = warp_affine(x_flat, T, (H, W))
+        
+        # (B*L, C, H, W) -> (B, L, C, H, W) -> (B, L, H, W, C)
+        x = x_warped.view(B, L, C, H, W)
+        x = x.permute(0, 1, 3, 4, 2).contiguous()
+        
         return x
 
 

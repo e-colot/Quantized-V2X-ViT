@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 # Use exact mappings when one old key should become exactly one new key.
 rename_exact: []
@@ -29,3 +29,63 @@ rename_regex:
   # Feed-forward wrapper: fn.* -> ff.*
   - pattern: '(^fusion_net\.encoder\.layers\.\d+\.1)\.fn\.'
     repl: '\1.ff.'
+
+# Compose multiple checkpoint tensors into a single model tensor.
+compose_tensors:
+  # HGT attention packs per-type linears into stacked tensors.
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.q_weight$'
+    source_templates:
+      - '\1.hgtCav.q_linears.0.weight'
+      - '\1.hgtCav.q_linears.1.weight'
+    op: stack
+    dim: 0
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.q_bias$'
+    source_templates:
+      - '\1.hgtCav.q_linears.0.bias'
+      - '\1.hgtCav.q_linears.1.bias'
+    op: stack
+    dim: 0
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.k_weight$'
+    source_templates:
+      - '\1.hgtCav.k_linears.0.weight'
+      - '\1.hgtCav.k_linears.1.weight'
+    op: stack
+    dim: 0
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.k_bias$'
+    source_templates:
+      - '\1.hgtCav.k_linears.0.bias'
+      - '\1.hgtCav.k_linears.1.bias'
+    op: stack
+    dim: 0
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.v_weight$'
+    source_templates:
+      - '\1.hgtCav.v_linears.0.weight'
+      - '\1.hgtCav.v_linears.1.weight'
+    op: stack
+    dim: 0
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.v_bias$'
+    source_templates:
+      - '\1.hgtCav.v_linears.0.bias'
+      - '\1.hgtCav.v_linears.1.bias'
+    op: stack
+    dim: 0
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.a_weight$'
+    source_templates:
+      - '\1.hgtCav.a_linears.0.weight'
+      - '\1.hgtCav.a_linears.1.weight'
+    op: stack
+    dim: 0
+  - target_pattern: '(^fusion_net\.encoder\.layers\.\d+\.0\.layers\.\d+\.0)\.hgtCav\.a_bias$'
+    source_templates:
+      - '\1.hgtCav.a_linears.0.bias'
+      - '\1.hgtCav.a_linears.1.bias'
+    op: stack
+    dim: 0
+
+# Model keys to exclude from missing-key coverage checks.
+ignore_missing_keys_regex:
+  # TensorRT-specific buffer added to PyramidWindowAttention.
+  - '\.num_windows_tensor$'
+  # STTF runtime buffers added for TensorRT-friendly graph state.
+  - '\.discrete_ratio$'
+  - '\.downsample_rate$'
