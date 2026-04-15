@@ -1,4 +1,4 @@
-version: 4
+version: 5
 
 # Use exact mappings when one old key should become exactly one new key.
 rename_exact: []
@@ -91,3 +91,5 @@ ignore_missing_keys_regex:
   - '\.downsample_rate$'
   # RTE sinusoid precomputed buffer introduced in the rewritten temporal encoder.
   - '^fusion_net\.encoder\.rte\.emb\.div_term$'
+  # PillarVFE geometry/runtime buffers added for TensorRT-friendly graph state.
+  - '^pillar_vfe\.(voxel_x|voxel_y|voxel_z|x_offset|y_offset|z_offset)$'

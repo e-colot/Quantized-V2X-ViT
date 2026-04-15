@@ -62,6 +62,7 @@ def load_saved_model(saved_path, model):
             remapped_state, remap_report = checkpoint_compat.remap_checkpoint_for_model(
                 checkpoint_state=checkpoint,
                 model_state=model.state_dict(),
+                rules_path=saved_path
             )
             checkpoint_compat.print_remap_report(remap_report)
             model.load_state_dict(remapped_state, strict=False)

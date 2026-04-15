@@ -6,6 +6,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Wrapper to get rid of a Long node in graph
+@torch.jit.script
+def trt_max(x: torch.Tensor):
+    val, _ = torch.max(x, dim=1, keepdim=True)
+    return val
 
 class PFNLayer(nn.Module):
     def __init__(self,
@@ -41,7 +46,7 @@ class PFNLayer(nn.Module):
             x = x.view(inputs.shape[0], inputs.shape[1], -1)
 
         x = F.relu(x)
-        x_max = torch.max(x, dim=1, keepdim=True)[0]
+        x_max = trt_max(x)
 
         if self.last_vfe:
             return x_max
@@ -79,12 +84,13 @@ class PillarVFE(nn.Module):
             )
         self.pfn_layers = nn.ModuleList(pfn_layers)
 
-        self.voxel_x = voxel_size[0]
-        self.voxel_y = voxel_size[1]
-        self.voxel_z = voxel_size[2]
-        self.x_offset = self.voxel_x / 2 + point_cloud_range[0]
-        self.y_offset = self.voxel_y / 2 + point_cloud_range[1]
-        self.z_offset = self.voxel_z / 2 + point_cloud_range[2]
+        self.register_buffer('voxel_x', torch.tensor(voxel_size[0], dtype=torch.float32))
+        self.register_buffer('voxel_y', torch.tensor(voxel_size[1], dtype=torch.float32))
+        self.register_buffer('voxel_z', torch.tensor(voxel_size[2], dtype=torch.float32))
+
+        self.register_buffer('x_offset', torch.tensor(voxel_size[0]/2 + point_cloud_range[0], dtype=torch.float32))
+        self.register_buffer('y_offset', torch.tensor(voxel_size[1]/2 + point_cloud_range[1], dtype=torch.float32))
+        self.register_buffer('z_offset', torch.tensor(voxel_size[2]/2 + point_cloud_range[2], dtype=torch.float32))
 
     def get_output_feature_dim(self):
         return self.num_filters[-1]
@@ -93,9 +99,7 @@ class PillarVFE(nn.Module):
     def get_paddings_indicator(actual_num: torch.Tensor, max_num: int, axis: int = 0):
         actual_num = torch.unsqueeze(actual_num, axis + 1)
         max_num_shape = [-1 if i == (axis + 1) else 1 for i in range(len(actual_num.shape))]
-        max_num = torch.arange(max_num,
-                               dtype=torch.int,
-                               device='cuda').view(max_num_shape)
+        max_num = torch.arange(max_num, dtype=torch.int32, device='cuda').view(max_num_shape)
         paddings_indicator = actual_num.int() > max_num
         return paddings_indicator
     
@@ -107,15 +111,14 @@ class PillarVFE(nn.Module):
         f_cluster = voxel_features[:, :, :3] - points_mean
 
         f_center = torch.zeros_like(voxel_features[:, :, :3])
-        f_center[:, :, 0] = voxel_features[:, :, 0] - (
-                voxel_coords[:, 3].to(voxel_features.dtype).unsqueeze(
-                    1) * self.voxel_x + self.x_offset)
-        f_center[:, :, 1] = voxel_features[:, :, 1] - (
-                voxel_coords[:, 2].to(voxel_features.dtype).unsqueeze(
-                    1) * self.voxel_y + self.y_offset)
-        f_center[:, :, 2] = voxel_features[:, :, 2] - (
-                voxel_coords[:, 1].to(voxel_features.dtype).unsqueeze(
-                    1) * self.voxel_z + self.z_offset)
+        f_center[:, :, 0] = voxel_features[:, :, 0] - (voxel_coords[:, 3].to(voxel_features.dtype)
+                                                       .unsqueeze(1) * self.voxel_x + self.x_offset)
+        
+        f_center[:, :, 1] = voxel_features[:, :, 1] - (voxel_coords[:, 2].to(voxel_features.dtype)
+                                                       .unsqueeze(1) * self.voxel_y + self.y_offset)
+        
+        f_center[:, :, 2] = voxel_features[:, :, 2] - (voxel_coords[:, 1].to(voxel_features.dtype)
+                                                       .unsqueeze(1) * self.voxel_z + self.z_offset)
 
         if self.use_absolute_xyz:
             features = [voxel_features, f_cluster, f_center]

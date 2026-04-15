@@ -8,14 +8,6 @@ import torch
 import yaml
 
 
-def _project_root() -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
-
-def default_rules_path() -> str:
-    return os.path.join(_project_root(), 'quantized', 'checkpoint_compat.yaml')
-
-
 def _unwrap_checkpoint(raw_checkpoint):
     if isinstance(raw_checkpoint, dict):
         if 'state_dict' in raw_checkpoint and isinstance(raw_checkpoint['state_dict'], dict):
@@ -128,9 +120,9 @@ def _matches_any_regex(key: str, patterns: List[str]) -> bool:
 def remap_checkpoint_for_model(
     checkpoint_state: Dict[str, torch.Tensor],
     model_state: Dict[str, torch.Tensor],
-    rules_path: str = None,
+    rules_path: str,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
-    rules_path = rules_path or default_rules_path()
+    rules_path = os.path.join(rules_path, 'checkpoint_compat.yaml')
     rules = _load_rules(rules_path)
 
     raw_state = _unwrap_checkpoint(checkpoint_state)
