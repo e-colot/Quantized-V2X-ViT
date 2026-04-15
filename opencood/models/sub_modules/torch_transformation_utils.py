@@ -81,7 +81,7 @@ def combine_roi_and_cav_mask(roi_mask, cav_mask):
 
 def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: torch.Tensor) -> torch.Tensor:
     """
-    Get rorated ROI mask.
+    Get rotated ROI mask.
 
     Parameters
     ----------
@@ -93,8 +93,7 @@ def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: to
     Returns
     -------
     roi_mask : torch.Tensor
-        Roated ROI mask with shape (N,2,3).
-
+        Rotated ROI mask with shape (N,2,3).
     """
     B, L, C, H, W = shape
     # To reduce the computation, we only need to calculate the
@@ -226,14 +225,14 @@ def normal_transform_pixel(
         tr_mat : torch.Tensor
             Normalized transform with shape :math:`(1, 3, 3)`.
     """
-    width = torch.as_tensor(width, dtype=dtype, device=device)
-    height = torch.as_tensor(height, dtype=dtype, device=device)
+    width = torch.tensor(width, dtype=dtype, device=device)
+    height = torch.tensor(height, dtype=dtype, device=device)
 
-    eps = torch.as_tensor(1e-14, dtype=dtype, device=device)
-    zero = torch.as_tensor(0.0, dtype=dtype, device=device)
-    neg_one = torch.as_tensor(-1.0, dtype=dtype, device=device)
-    one = torch.as_tensor(1.0, dtype=dtype, device=device)
-    two = torch.as_tensor(2.0, dtype=dtype, device=device)
+    eps = torch.tensor(1e-14, dtype=dtype, device=device)
+    zero = torch.tensor(0.0, dtype=dtype, device=device)
+    neg_one = torch.tensor(-1.0, dtype=dtype, device=device)
+    one = torch.tensor(1.0, dtype=dtype, device=device)
+    two = torch.tensor(2.0, dtype=dtype, device=device)
 
     width_denom = width - one + eps
     height_denom = height - one + eps
@@ -251,7 +250,7 @@ def normal_transform_pixel(
     return tr_mat.unsqueeze(0)  # unsqueeze to 1x3x3
 
 
-def eye_like(n: int, B: int, device: torch.device, dtype: torch.dtype):
+def eye_like(n: int, B: torch.Tensor, device: torch.device, dtype: torch.dtype):
     r"""
     Return a 2-D tensor with ones on the diagonal and
     zeros elsewhere with the same batch size as the input.
@@ -276,7 +275,7 @@ def eye_like(n: int, B: int, device: torch.device, dtype: torch.dtype):
     identity = (range_n[:, None] == range_n[None, :]).to(dtype)
     
     # Expand/Repeat to batch size
-    return identity.unsqueeze(0).repeat(B, 1, 1)
+    return identity.unsqueeze(0).expand(B.shape[0], -1, -1).contiguous()
 
 
 def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[int, int], dsize_dst: Tuple[int, int]):
@@ -330,22 +329,44 @@ def get_rotation_matrix2d(M: torch.Tensor, dsize: Tuple[int, int]):
     """
     device = 'cuda'
     dtype = M.dtype
+    B = M.shape[0]
 
     H = torch.tensor(dsize[0], dtype=dtype, device=device)
     W = torch.tensor(dsize[1], dtype=dtype, device=device)
-    B = M.shape[0]
+    two = torch.tensor(2.0, dtype=dtype, device=device)
 
-    center = torch.stack([W, H]).to(dtype) * 0.5
-    shift_m = eye_like(3, B, device=device, dtype=dtype)
-    shift_m[:, :2, 2] = center
+    cx = W / two
+    cy = H / two
+    
+    ones = torch.ones(B, device=device, dtype=dtype)
+    zeros = torch.zeros(B, device=device, dtype=dtype)
+    cx_b = cx.expand(B)
+    cy_b = cy.expand(B)
 
-    shift_m_inv = eye_like(3, B, device=device, dtype=dtype)
-    shift_m_inv[:, :2, 2] = -center
+    r0 = torch.stack([ones, zeros, cx_b], dim=1)
+    r1 = torch.stack([zeros, ones, cy_b], dim=1)
+    r2 = torch.stack([zeros, zeros, ones], dim=1)
+    shift_m = torch.stack([r0, r1, r2], dim=1)
 
-    rotat_m = eye_like(3, B, device=device, dtype=dtype)
-    rotat_m[:, :2, :2] = M[:, :2, :2]
-    affine_m = shift_m @ rotat_m @ shift_m_inv
-    return affine_m[:, :2, :]  # Bx2x3
+    # 3. Construct shift_m_inv functionally
+    r0_inv = torch.stack([ones, zeros, -cx_b], dim=1)
+    r1_inv = torch.stack([zeros, ones, -cy_b], dim=1)
+    shift_m_inv = torch.stack([r0_inv, r1_inv, r2], dim=1)
+
+    # 4. Construct rotat_m functionally
+    # Extract the 2x2 rotation from M
+    rot_22 = M[:, :2, :2] 
+    # Row 0: [m00, m01, 0]
+    # Row 1: [m10, m11, 0]
+    # Row 2: [0,   0,   1]
+    r0_rot = torch.cat([rot_22[:, 0, :], zeros.unsqueeze(1)], dim=1)
+    r1_rot = torch.cat([rot_22[:, 1, :], zeros.unsqueeze(1)], dim=1)
+    rotat_m = torch.stack([r0_rot, r1_rot, r2], dim=1)
+
+    # 5. Matrix Multiply
+    affine_m = torch.bmm(torch.bmm(shift_m, rotat_m), shift_m_inv)
+    
+    return affine_m[:, :2, :]
 
 
 def get_transformation_matrix(M, dsize: Tuple[int, int]):
@@ -425,6 +446,130 @@ def _gather_from_hw(src, x_idx, y_idx):
     return out.view(B, C, H_out, W_out)
 
 
+def _affine_grid_sample_approx_prepare_norm_grid(
+        theta: torch.Tensor,
+        dsize: Tuple[int, int],
+        align_corners: bool = True):
+    """Build normalized sampling grid of shape (B, H_out, W_out, 2)."""
+    device = 'cuda'
+    grid_dtype = theta.dtype
+
+    H_out = torch.tensor(dsize[0], device=device, dtype=grid_dtype)
+    W_out = torch.tensor(dsize[1], device=device, dtype=grid_dtype)
+    eps = torch.tensor(1e-14, device=device, dtype=grid_dtype)
+    one = torch.tensor(1.0, device=device, dtype=grid_dtype)
+    two = torch.tensor(2.0, device=device, dtype=grid_dtype)
+    half = torch.tensor(0.5, device=device, dtype=grid_dtype)
+
+    if align_corners:
+        step_y = two / (H_out - one + eps)
+        ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - one
+
+        step_x = two / (W_out - one + eps)
+        xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - one
+    else:
+        ys = (two * (torch.arange(H_out, device=device, dtype=grid_dtype) + half)
+              / H_out - one)
+        xs = (two * (torch.arange(W_out, device=device, dtype=grid_dtype) + half)
+              / W_out - one)
+
+    grid_y = ys.view(-1, 1)
+    grid_x = xs.view(1, -1)
+
+    ones = torch.ones(dsize[0], dsize[1], device=device, dtype=grid_dtype)
+    base_grid = torch.stack((
+        grid_x.expand(dsize[0], dsize[1]).contiguous(),
+        grid_y.expand(dsize[0], dsize[1]).contiguous(),
+        ones), dim=-1)
+
+    flat_grid = base_grid.reshape(-1, 3)
+    flat_grid = flat_grid.unsqueeze(0).expand(theta.shape[0], -1, -1).contiguous()
+    norm_grid = torch.bmm(flat_grid, theta.transpose(1, 2))
+    norm_grid = norm_grid.reshape(theta.shape[0], base_grid.size(0), base_grid.size(1), 2)
+    return norm_grid
+
+
+def _affine_grid_sample_approx_bilinear_sample(
+        src: torch.Tensor,
+        norm_grid: torch.Tensor,
+        dtype: torch.dtype,
+        padding_mode: str = 'zeros',
+        align_corners: bool = True):
+    """Bilinear sampling stage for the precomputed normalized grid."""
+    if padding_mode not in ('zeros', 'border', 'reflection'):
+        raise ValueError(f"Unsupported padding_mode: {padding_mode}")
+    device = 'cuda'
+
+    x = norm_grid[..., 0]
+    y = norm_grid[..., 1]
+
+    H, W = src.shape[2], src.shape[3]
+    
+    zero = torch.tensor(0, device=device, dtype=dtype)
+    one = torch.tensor(1.0, device=device, dtype=dtype)
+    two = torch.tensor(2.0, device=device, dtype=dtype)
+    half = torch.tensor(0.5, device=device, dtype=dtype)
+
+    if align_corners:
+        x = (x + one) * (W - one) / two
+        y = (y + one) * (H - one) / two
+        reflect_x_low, reflect_x_high = zero, W - one
+        reflect_y_low, reflect_y_high = zero, H - one
+    else:
+        x = ((x + one) * W - one) / two
+        y = ((y + one) * H - one) / two
+        reflect_x_low, reflect_x_high = -half, W - half
+        reflect_y_low, reflect_y_high = -half, H - half
+
+    if padding_mode == 'border':
+        x = x.clamp(0, W - 1)
+        y = y.clamp(0, H - 1)
+    elif padding_mode == 'reflection':
+        x = _reflect_coordinates(x, reflect_x_low, reflect_x_high).clamp(0, W - 1)
+        y = _reflect_coordinates(y, reflect_y_low, reflect_y_high).clamp(0, H - 1)
+
+    src_work = src
+    if src_work.dtype != x.dtype:
+        src_work = src_work.to(x.dtype)
+
+    x0 = torch.floor(x)
+    y0 = torch.floor(y)
+    x1 = x0 + one
+    y1 = y0 + one
+
+    wa = (x1 - x) * (y1 - y)
+    wb = (x1 - x) * (y - y0)
+    wc = (x - x0) * (y1 - y)
+    wd = (x - x0) * (y - y0)
+
+    x0_valid = (x0 >= 0) * (x0 <= W - 1)
+    x1_valid = (x1 >= 0) * (x1 <= W - 1)
+    y0_valid = (y0 >= 0) * (y0 <= H - 1)
+    y1_valid = (y1 >= 0) * (y1 <= H - 1)
+
+    if padding_mode == 'zeros':
+        wa = wa * (x0_valid.to(wa.dtype) * y0_valid.to(wa.dtype))
+        wb = wb * (x0_valid.to(wb.dtype) * y1_valid.to(wb.dtype))
+        wc = wc * (x1_valid.to(wc.dtype) * y0_valid.to(wc.dtype))
+        wd = wd * (x1_valid.to(wd.dtype) * y1_valid.to(wd.dtype))
+
+    x0_idx = x0.clamp(0, W - 1).to(torch.int32)
+    y0_idx = y0.clamp(0, H - 1).to(torch.int32)
+    x1_idx = x1.clamp(0, W - 1).to(torch.int32)
+    y1_idx = y1.clamp(0, H - 1).to(torch.int32)
+
+    Ia = _gather_from_hw(src_work, x0_idx, y0_idx)
+    Ib = _gather_from_hw(src_work, x0_idx, y1_idx)
+    Ic = _gather_from_hw(src_work, x1_idx, y0_idx)
+    Id = _gather_from_hw(src_work, x1_idx, y1_idx)
+
+    out = (Ia * wa.unsqueeze(1) +
+           Ib * wb.unsqueeze(1) +
+           Ic * wc.unsqueeze(1) +
+           Id * wd.unsqueeze(1))
+    return out
+
+
 def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tuple[int, int],
                               mode: str = 'bilinear',
                               padding_mode: str = 'zeros',
@@ -456,136 +601,23 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tup
     if padding_mode not in ('zeros', 'border', 'reflection'):
         raise ValueError(f"Unsupported padding_mode: {padding_mode}")
 
-    B, C, H, W = src.shape
-    H_out, W_out = dsize
-    device = 'cuda'
-    grid_dtype = theta.dtype
-
-    if align_corners:
-        # linspace struggles in the tensorRT conversion (due to its dynamic range)
-        # ys = torch.linspace(-1.0, 1.0, H_out, device=device, dtype=grid_dtype)
-        # xs = torch.linspace(-1.0, 1.0, W_out, device=device, dtype=grid_dtype)
-        # torch.arrange lies closer to the HW computations
-
-        # if H_out > 1:
-        #     step_y = 2.0 / (H_out - 1)
-        #     ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - 1.0
-        # else:
-        #     ys = torch.zeros(1, device=device, dtype=grid_dtype) # Handle edge case
-
-        # if W_out > 1:
-        #     step_x = 2.0 / (W_out - 1)
-        #     xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - 1.0
-        # else:
-        #     xs = torch.zeros(1, device=device, dtype=grid_dtype)
-
-        eps = 1e-14
-
-        denom_y = (float(H_out) - 1.0) + eps
-        step_y = 2.0 / denom_y
-        ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - 1.0
-
-        denom_x = (float(W_out) - 1.0) + eps
-        step_x = 2.0 / denom_x
-        xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - 1.0
-
-    else:
-        ys = (2.0 * (torch.arange(H_out, device=device, dtype=grid_dtype) + 0.5)
-              / H_out - 1.0)
-        xs = (2.0 * (torch.arange(W_out, device=device, dtype=grid_dtype) + 0.5)
-              / W_out - 1.0)
-
-    # tensorRT struggles with meshgrid
-    # grid_y, grid_x = torch.meshgrid(ys, xs, indexing='ij')
-    # Use explicit broadcasting shapes:
-    grid_y = ys.view(-1, 1)  # (H_out, 1)
-    grid_x = xs.view(1, -1)  # (1, W_out)
-
-
-    ones = torch.ones(H_out, W_out, device=device, dtype=grid_dtype)
-    base_grid = torch.stack((
-        grid_x.expand(H_out, W_out).contiguous(),
-        grid_y.expand(H_out, W_out).contiguous(),
-        ones), dim=-1)  # (H_out, W_out, 3)
-
-    flat_grid = base_grid.reshape(H_out * W_out, 3)           # (H*W, 3)
-    flat_grid = flat_grid.unsqueeze(0).expand(B, -1, -1).contiguous()  # (B, H*W, 3)
-    norm_grid = torch.bmm(flat_grid, theta.transpose(1, 2))   # (B, H*W, 2)
-    norm_grid = norm_grid.reshape(B, H_out, W_out, 2)         # (B, H_out, W_out, 2)
-
-    x = norm_grid[..., 0]
-    y = norm_grid[..., 1]
-
-    if align_corners:
-        x = (x + 1) * (W - 1) / 2
-        y = (y + 1) * (H - 1) / 2
-        reflect_x_low, reflect_x_high = 0.0, W - 1.0
-        reflect_y_low, reflect_y_high = 0.0, H - 1.0
-    else:
-        x = ((x + 1) * W - 1) / 2
-        y = ((y + 1) * H - 1) / 2
-        reflect_x_low, reflect_x_high = -0.5, W - 0.5
-        reflect_y_low, reflect_y_high = -0.5, H - 0.5
-
-    if padding_mode == 'border':
-        x = x.clamp(0, W - 1)
-        y = y.clamp(0, H - 1)
-    elif padding_mode == 'reflection':
-        x = _reflect_coordinates(x, reflect_x_low, reflect_x_high).clamp(0, W - 1)
-        y = _reflect_coordinates(y, reflect_y_low, reflect_y_high).clamp(0, H - 1)
-
-    src_work = src
-    if src_work.dtype != x.dtype:
-        src_work = src_work.to(x.dtype)
+    norm_grid = _affine_grid_sample_approx_prepare_norm_grid(
+        theta,
+        dsize,
+        align_corners=align_corners,
+    )
 
     # unused (changed get_rotated_roi to use mode='bilinear')
-    if mode == 'nearest':
-        xn = torch.round(x)
-        yn = torch.round(y)
-        valid = (xn >= 0) & (xn <= W - 1) & (yn >= 0) & (yn <= H - 1)
-        x_idx = xn.clamp(0, W - 1).long()
-        y_idx = yn.clamp(0, H - 1).long()
-        out = _gather_from_hw(src_work, x_idx, y_idx)
-        if padding_mode == 'zeros':
-            out = out * valid.unsqueeze(1).to(out.dtype)
-        return out
+    # if mode == 'nearest':
+    #     ...
 
-    x0 = torch.floor(x)
-    y0 = torch.floor(y)
-    x1 = x0 + 1
-    y1 = y0 + 1
-
-    wa = (x1 - x) * (y1 - y)
-    wb = (x1 - x) * (y - y0)
-    wc = (x - x0) * (y1 - y)
-    wd = (x - x0) * (y - y0)
-    
-    x0_valid = (x0 >= 0) * (x0 <= W - 1)
-    x1_valid = (x1 >= 0) * (x1 <= W - 1)
-    y0_valid = (y0 >= 0) * (y0 <= H - 1)
-    y1_valid = (y1 >= 0) * (y1 <= H - 1)
-
-    if padding_mode == 'zeros':
-        wa = wa * (x0_valid.to(wa.dtype) * y0_valid.to(wa.dtype))
-        wb = wb * (x0_valid.to(wb.dtype) * y1_valid.to(wb.dtype))
-        wc = wc * (x1_valid.to(wc.dtype) * y0_valid.to(wc.dtype))
-        wd = wd * (x1_valid.to(wd.dtype) * y1_valid.to(wd.dtype))
-
-    x0_idx = x0.clamp(0, W - 1).long()
-    y0_idx = y0.clamp(0, H - 1).long()
-    x1_idx = x1.clamp(0, W - 1).long()
-    y1_idx = y1.clamp(0, H - 1).long()
-
-    Ia = _gather_from_hw(src_work, x0_idx, y0_idx)
-    Ib = _gather_from_hw(src_work, x0_idx, y1_idx)
-    Ic = _gather_from_hw(src_work, x1_idx, y0_idx)
-    Id = _gather_from_hw(src_work, x1_idx, y1_idx)
-
-    out = (Ia * wa.unsqueeze(1) +
-           Ib * wb.unsqueeze(1) +
-           Ic * wc.unsqueeze(1) +
-           Id * wd.unsqueeze(1))
-    return out
+    return _affine_grid_sample_approx_bilinear_sample(
+        src,
+        norm_grid,
+        theta.dtype,
+        padding_mode=padding_mode,
+        align_corners=align_corners,
+    )
 
 
 def warp_affine(

@@ -9,13 +9,20 @@ import torch
 import opencood.hypes_yaml.yaml_utils as yaml_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.models.sub_modules.torch_transformation_utils import (
+    _3x3_cramer_inverse,
+    _affine_grid_sample_approx_bilinear_sample,
+    _affine_grid_sample_approx_prepare_norm_grid,
+    _gather_from_hw,
     affine_grid_sample_approx,
     combine_roi_and_cav_mask,
     convert_affinematrix_to_homography,
+    eye_like,
     get_discretized_transformation_matrix,
     get_roi_and_cav_mask,
+    get_rotation_matrix2d,
     get_rotated_roi,
     get_transformation_matrix,
+    normal_transform_pixel,
     normalize_homography,
     warp_affine,
 )
@@ -120,6 +127,35 @@ class FunctionAffineGridSampleApprox(torch.nn.Module):
         )
 
 
+class FunctionAffineGridPrepareNormGrid(torch.nn.Module):
+    def __init__(self, h: int, w: int):
+        super().__init__()
+        self.dsize = (int(h), int(w))
+
+    def forward(self, theta):
+        return _affine_grid_sample_approx_prepare_norm_grid(
+            theta,
+            self.dsize,
+            align_corners=True,
+        )
+
+
+class FunctionAffineGridBilinearSample(torch.nn.Module):
+    def forward(self, src, norm_grid):
+        return _affine_grid_sample_approx_bilinear_sample(
+            src,
+            norm_grid,
+            torch.float32,
+            padding_mode="zeros",
+            align_corners=True,
+        )
+
+
+class FunctionGatherFromHw(torch.nn.Module):
+    def forward(self, src, x_idx, y_idx):
+        return _gather_from_hw(src, x_idx, y_idx)
+
+
 class FunctionWarpAffine(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
@@ -134,6 +170,44 @@ class FunctionWarpAffine(torch.nn.Module):
             padding_mode="zeros",
             align_corners=True,
         )
+
+
+class FunctionEyeLikeFromAffine(torch.nn.Module):
+    def __init__(self, n: int):
+        super().__init__()
+        self.n = int(n)
+
+    def forward(self, affine_2x3):
+        return eye_like(self.n, affine_2x3, device=affine_2x3.device, dtype=affine_2x3.dtype)
+
+
+class FunctionNormalTransformPixelFromAffine(torch.nn.Module):
+    def __init__(self, h: int, w: int):
+        super().__init__()
+        self.h = int(h)
+        self.w = int(w)
+
+    def forward(self, affine_2x3):
+        return normal_transform_pixel(
+            self.h,
+            self.w,
+            device=affine_2x3.device,
+            dtype=affine_2x3.dtype,
+        )
+
+
+class Function3x3CramerInverse(torch.nn.Module):
+    def forward(self, matrix_3x3):
+        return _3x3_cramer_inverse(matrix_3x3)
+
+
+class FunctionGetRotationMatrix2D(torch.nn.Module):
+    def __init__(self, h: int, w: int):
+        super().__init__()
+        self.dsize = (int(h), int(w))
+
+    def forward(self, affine_2x3):
+        return get_rotation_matrix2d(affine_2x3, self.dsize)
 
 
 def _extract_model_inputs_from_batch(batch_data):
@@ -273,6 +347,10 @@ def main():
     selected_function = os.environ.get("TRT_FUNCTION", "all")
     valid_function_names = {
         "all",
+        "eye_like",
+        "normal_transform_pixel",
+        "cramer_inverse_3x3",
+        "rotation_matrix2d",
         "discretized_transform",
         "transformation_matrix",
         "rotated_roi",
@@ -280,6 +358,9 @@ def main():
         "get_roi_and_cav_mask",
         "convert_affine_to_homography",
         "normalize_homography",
+        "gather_from_hw",
+        "affine_grid_prepare_norm_grid",
+        "affine_grid_bilinear_sample",
         "affine_grid_sample_approx",
         "warp_affine",
     }
@@ -323,6 +404,19 @@ def main():
             encoder.downsample_rate,
         ).to("cuda").eval()
         dist_matrix = function_discretized_transform(spatial_correction_matrix)
+        affine_2x3 = dist_matrix.reshape(-1, 2, 3)
+
+        function_eye_like = FunctionEyeLikeFromAffine(3).to("cuda").eval()
+        _ = function_eye_like(affine_2x3)
+
+        function_normal_transform_pixel = FunctionNormalTransformPixelFromAffine(h, w).to("cuda").eval()
+        normal_transform = function_normal_transform_pixel(affine_2x3)
+
+        function_cramer_inverse_3x3 = Function3x3CramerInverse().to("cuda").eval()
+        _ = function_cramer_inverse_3x3(normal_transform)
+
+        function_rotation_matrix2d = FunctionGetRotationMatrix2D(h, w).to("cuda").eval()
+        _ = function_rotation_matrix2d(affine_2x3)
 
         function_transformation_matrix = FunctionGetTransformationMatrix(h, w).to("cuda").eval()
         transform_matrix = function_transformation_matrix(dist_matrix)
@@ -351,6 +445,18 @@ def main():
         src = torch.randn((b * l, 1, h, w), device="cuda", dtype=torch.float32)
         theta = normalized_homography[:, :2, :]
 
+        x_idx = torch.randint(0, w, (b * l, h, w), device="cuda", dtype=torch.long)
+        y_idx = torch.randint(0, h, (b * l, h, w), device="cuda", dtype=torch.long)
+
+        function_gather_from_hw = FunctionGatherFromHw().to("cuda").eval()
+        _ = function_gather_from_hw(src, x_idx, y_idx)
+
+        function_affine_grid_prepare_norm_grid = FunctionAffineGridPrepareNormGrid(h, w).to("cuda").eval()
+        norm_grid = function_affine_grid_prepare_norm_grid(theta)
+
+        function_affine_grid_bilinear_sample = FunctionAffineGridBilinearSample().to("cuda").eval()
+        _ = function_affine_grid_bilinear_sample(src, norm_grid)
+
         function_affine_grid_sample_approx = FunctionAffineGridSampleApprox(h, w).to("cuda").eval()
         _ = function_affine_grid_sample_approx(src, theta)
 
@@ -360,6 +466,31 @@ def main():
     enabled_precisions = {torch.float16} if opt.precision == "fp16" else {torch.float32}
 
     functions = [
+        (
+            "eye_like",
+            function_eye_like,
+            (affine_2x3,),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (affine_2x3,)),
+        ),
+        # no computations -> not converted to tensorRT
+        # (
+        #     "normal_transform_pixel",
+        #     function_normal_transform_pixel,
+        #     (affine_2x3,),
+        #     _build_trt_inputs_from_example_tensors(torch_tensorrt, (affine_2x3,)),
+        # ),
+        (
+            "cramer_inverse_3x3",
+            function_cramer_inverse_3x3,
+            (normal_transform,),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (normal_transform,)),
+        ),
+        (
+            "rotation_matrix2d",
+            function_rotation_matrix2d,
+            (affine_2x3,),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (affine_2x3,)),
+        ),
         (
             "discretized_transform",
             function_discretized_transform,
@@ -373,22 +504,10 @@ def main():
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (dist_matrix,)),
         ),
         (
-            "rotated_roi",
-            function_rotated_roi,
-            (transform_matrix,),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (transform_matrix,)),
-        ),
-        (
             "combine_roi_and_cav_mask",
             function_combine_roi_and_cav_mask,
             (roi_mask, cav_mask),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (roi_mask, cav_mask)),
-        ),
-        (
-            "get_roi_and_cav_mask",
-            function_get_roi_and_cav_mask,
-            (cav_mask, spatial_correction_matrix),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (cav_mask, spatial_correction_matrix)),
         ),
         (
             "convert_affine_to_homography",
@@ -403,6 +522,24 @@ def main():
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (homography,)),
         ),
         (
+            "gather_from_hw",
+            function_gather_from_hw,
+            (src, x_idx, y_idx),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (src, x_idx, y_idx)),
+        ),
+        (
+            "affine_grid_prepare_norm_grid",
+            function_affine_grid_prepare_norm_grid,
+            (theta,),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (theta,)),
+        ),
+        (
+            "affine_grid_bilinear_sample",
+            function_affine_grid_bilinear_sample,
+            (src, norm_grid),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (src, norm_grid)),
+        ),
+        (
             "affine_grid_sample_approx",
             function_affine_grid_sample_approx,
             (src, theta),
@@ -413,6 +550,18 @@ def main():
             function_warp_affine,
             (src, transform_matrix),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (src, transform_matrix)),
+        ),
+        (
+            "rotated_roi",
+            function_rotated_roi,
+            (transform_matrix,),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (transform_matrix,)),
+        ),
+        (
+            "get_roi_and_cav_mask",
+            function_get_roi_and_cav_mask,
+            (cav_mask, spatial_correction_matrix),
+            _build_trt_inputs_from_example_tensors(torch_tensorrt, (cav_mask, spatial_correction_matrix)),
         ),
     ]
 
