@@ -79,7 +79,7 @@ class RelTemporalEncoding(nn.Module):
         self.emb.weight.data[:, 1::2] = torch.cos(position * self.div_term) / math.sqrt(n_hid)
         self.emb.weight.requires_grad = False
         
-        self.RTE_ratio = RTE_ratio
+        self.register_buffer('RTE_ratio', torch.tensor(RTE_ratio, dtype=torch.int32))
         self.lin = nn.Linear(n_hid, n_hid)
 
     def forward(self, x, t):
