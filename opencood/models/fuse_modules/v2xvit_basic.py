@@ -19,7 +19,7 @@ class STTF(nn.Module):
         self.register_buffer('discrete_ratio', torch.tensor(args['voxel_size'][0]))
         self.register_buffer('downsample_rate', torch.tensor(float(args['downsample_rate'])))
 
-    def forward(self, x, mask, spatial_correction_matrix):
+    def forward(self, x, spatial_correction_matrix):
         # x shape: (B, L, H, W, C) -> (B, L, C, H, W)
         x = x.permute(0, 1, 4, 2, 3)
         B, L, C, H, W = x.shape
@@ -52,18 +52,15 @@ class RTE(nn.Module):
     def forward(self, x, dts):
         # x: (B, L, H, W, C)
         # dts: (B, L)
-        B, L, H, W, C = x.shape
         
-        # 1. Flatten B and L to process everything in one go
-        x_flat = x.view(B * L, H, W, C)
-        dts_flat = dts.view(B * L)
+        # Flatten B and L to process everything in one go
+        x_flat = x.view(-1, x.shape[2], x.shape[3], x.shape[4])
+        dts_flat = dts.view(-1)
         
-        # 2. Call the vectorized embedding
         # Result: (B*L, H, W, C)
         x_rte = self.emb(x_flat, dts_flat)
         
-        # 3. Reshape back
-        return x_rte.view(B, L, H, W, C)
+        return x_rte.view(x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4])
 
 
 class RelTemporalEncoding(nn.Module):
@@ -91,7 +88,7 @@ class RelTemporalEncoding(nn.Module):
         
         # Compute indices: (N)
         # Ensure t is treated as a Tensor throughout
-        indices = (t * self.RTE_ratio).long()
+        indices = (t * self.RTE_ratio)
         
         # Get temporal embeddings: (N, C)
         t_emb = self.lin(self.emb(indices))
@@ -187,7 +184,7 @@ class V2XTEncoder(nn.Module):
             # dt: (B,L)
             dt = prior_encoding[:, :, 0, 0, 1].to(torch.int32)
             x = self.rte(x, dt)
-        x = self.sttf(x, mask, spatial_correction_matrix)
+        x = self.sttf(x, spatial_correction_matrix)
         com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(
             3) if not self.use_roi_mask else get_roi_and_cav_mask(x.shape,
                                                                   mask,

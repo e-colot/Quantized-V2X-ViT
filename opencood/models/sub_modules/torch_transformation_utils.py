@@ -116,7 +116,7 @@ def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: to
 def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: float,
                                           downsample_rate: float):
     """
-    Get disretized transformation matrix.
+    Get discretized transformation matrix.
     Parameters
     ----------
     matrix : torch.Tensor
@@ -140,7 +140,7 @@ def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: 
     matrix[:, :, :, -1] = matrix[:, :, :, -1] \
                           / (discrete_ratio * downsample_rate)
 
-    return matrix.type(dtype=torch.float)
+    return matrix.type(dtype=torch.float32)
 
 def _3x3_cramer_inverse(input):
     r"""
@@ -207,7 +207,7 @@ def _torch_inverse_cast(input):
 
 
 def normal_transform_pixel(
-        height: int, width: int, device: torch.device, dtype: torch.dtype, eps: float = 1e-14):
+        height: int, width: int, device: torch.device, dtype: torch.dtype):
     r"""
     Compute the normalization matrix from image size in pixels to [-1, 1].
     Args:
@@ -226,19 +226,17 @@ def normal_transform_pixel(
         tr_mat : torch.Tensor
             Normalized transform with shape :math:`(1, 3, 3)`.
     """
-    # prevent divide by zero bugs
-    # width_denom = eps if width == 1 else width - 1.0
-    # height_denom = eps if height == 1 else height - 1.0
+    width = torch.as_tensor(width, dtype=dtype, device=device)
+    height = torch.as_tensor(height, dtype=dtype, device=device)
 
-    # slight difference, allows to remove conditional statement
-    width_denom = float(width) - 1.0 + eps
-    height_denom = float(height) - 1.0 + eps
+    eps = torch.as_tensor(1e-14, dtype=dtype, device=device)
+    zero = torch.as_tensor(0.0, dtype=dtype, device=device)
+    neg_one = torch.as_tensor(-1.0, dtype=dtype, device=device)
+    one = torch.as_tensor(1.0, dtype=dtype, device=device)
+    two = torch.as_tensor(2.0, dtype=dtype, device=device)
 
-    # constants
-    zero = torch.full([], 0.0, device=device, dtype=dtype)
-    neg_one = torch.full([], -1.0, device=device, dtype=dtype)
-    one = torch.full([], 1.0, device=device, dtype=dtype)
-    two = torch.tensor([2.0], device=device, dtype=dtype)
+    width_denom = width - one + eps
+    height_denom = height - one + eps
 
     el_0_0 = two / width_denom
     el_1_1 = two / height_denom
@@ -281,7 +279,7 @@ def eye_like(n: int, B: int, device: torch.device, dtype: torch.dtype):
     return identity.unsqueeze(0).repeat(B, 1, 1)
 
 
-def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[int, int], dsize_dst: Tuple[int, int] = (-1, -1)):
+def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[int, int], dsize_dst: Tuple[int, int]):
     r"""
     Normalize a given homography in pixels to [-1, 1].
     Args:
@@ -297,8 +295,6 @@ def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[i
         dst_norm_trans_src_norm : torch.Tensor
             The normalized homography of shape :math:`(B, 3, 3)`.
     """
-    if dsize_dst[0] == -1 and dsize_dst[1] == -1:
-        dsize_dst = dsize_src
     # source and destination sizes
     src_h, src_w = dsize_src
     dst_h, dst_w = dsize_dst
@@ -558,26 +554,13 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tup
     wb = (x1 - x) * (y - y0)
     wc = (x - x0) * (y1 - y)
     wd = (x - x0) * (y - y0)
-
-    # tensorRT struggles with bitwise operations
-    # x0_valid = (x0 >= 0) & (x0 <= W - 1)
-    # x1_valid = (x1 >= 0) & (x1 <= W - 1)
-    # y0_valid = (y0 >= 0) & (y0 <= H - 1)
-    # y1_valid = (y1 >= 0) & (y1 <= H - 1)
-    # multiplying by a mask is equivalent
+    
     x0_valid = (x0 >= 0) * (x0 <= W - 1)
     x1_valid = (x1 >= 0) * (x1 <= W - 1)
     y0_valid = (y0 >= 0) * (y0 <= H - 1)
     y1_valid = (y1 >= 0) * (y1 <= H - 1)
 
     if padding_mode == 'zeros':
-        # tensorRT struggles with bitwise operations
-        # wa = wa * (x0_valid & y0_valid).to(wa.dtype)
-        # wb = wb * (x0_valid & y1_valid).to(wb.dtype)
-        # wc = wc * (x1_valid & y0_valid).to(wc.dtype)
-        # wd = wd * (x1_valid & y1_valid).to(wd.dtype)
-        # multiplying by a mask is equivalent
-
         wa = wa * (x0_valid.to(wa.dtype) * y0_valid.to(wa.dtype))
         wb = wb * (x0_valid.to(wb.dtype) * y1_valid.to(wb.dtype))
         wc = wc * (x1_valid.to(wc.dtype) * y0_valid.to(wc.dtype))
