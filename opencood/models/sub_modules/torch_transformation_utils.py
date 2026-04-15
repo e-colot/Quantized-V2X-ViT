@@ -489,23 +489,29 @@ def _affine_grid_sample_approx_prepare_norm_grid(
     return norm_grid
 
 
+def _clamp(src:torch.Tensor, min:torch.Tensor, max:torch.Tensor):
+    out = torch.where(src < min, min, src)
+    return torch.where(out > max, max, out)
+
+
 def _affine_grid_sample_approx_bilinear_sample(
         src: torch.Tensor,
         norm_grid: torch.Tensor,
         dtype: torch.dtype,
         padding_mode: str = 'zeros',
         align_corners: bool = True):
-    """Bilinear sampling stage for the precomputed normalized grid."""
-    if padding_mode not in ('zeros', 'border', 'reflection'):
-        raise ValueError(f"Unsupported padding_mode: {padding_mode}")
-    device = 'cuda'
-
+    
+    device = src.device # Best practice: use the source tensor's device
+    
     x = norm_grid[..., 0]
     y = norm_grid[..., 1]
 
-    H, W = src.shape[2], src.shape[3]
+    # FIX 1: Use .size() and cast to Tensor immediately to stay in the graph
+    # This prevents aten::item during the math operations below
+    H = torch.tensor(src.size(2), device=device, dtype=dtype)
+    W = torch.tensor(src.size(3), device=device, dtype=dtype)
     
-    zero = torch.tensor(0, device=device, dtype=dtype)
+    zero = torch.tensor(0.0, device=device, dtype=dtype)
     one = torch.tensor(1.0, device=device, dtype=dtype)
     two = torch.tensor(2.0, device=device, dtype=dtype)
     half = torch.tensor(0.5, device=device, dtype=dtype)
@@ -521,16 +527,17 @@ def _affine_grid_sample_approx_bilinear_sample(
         reflect_x_low, reflect_x_high = -half, W - half
         reflect_y_low, reflect_y_high = -half, H - half
 
-    if padding_mode == 'border':
-        x = x.clamp(0, W - 1)
-        y = y.clamp(0, H - 1)
-    elif padding_mode == 'reflection':
-        x = _reflect_coordinates(x, reflect_x_low, reflect_x_high).clamp(0, W - 1)
-        y = _reflect_coordinates(y, reflect_y_low, reflect_y_high).clamp(0, H - 1)
+    # FIX 2: Use Tensors for clamping boundaries
+    W_minus_one = W - one
+    H_minus_one = H - one
 
-    src_work = src
-    if src_work.dtype != x.dtype:
-        src_work = src_work.to(x.dtype)
+    if padding_mode == 'border':
+        x = _clamp(x, zero, W_minus_one)
+        y = _clamp(y, zero, H_minus_one)
+    elif padding_mode == 'reflection':
+        # Not taken
+        x = _clamp(_reflect_coordinates(x, reflect_x_low, reflect_x_high), zero, W_minus_one)
+        y = _clamp(_reflect_coordinates(y, reflect_y_low, reflect_y_high), zero, H_minus_one)
 
     x0 = torch.floor(x)
     y0 = torch.floor(y)
@@ -541,27 +548,28 @@ def _affine_grid_sample_approx_bilinear_sample(
     wb = (x1 - x) * (y - y0)
     wc = (x - x0) * (y1 - y)
     wd = (x - x0) * (y - y0)
-
-    x0_valid = (x0 >= 0) * (x0 <= W - 1)
-    x1_valid = (x1 >= 0) * (x1 <= W - 1)
-    y0_valid = (y0 >= 0) * (y0 <= H - 1)
-    y1_valid = (y1 >= 0) * (y1 <= H - 1)
+    
+    x0_valid = torch.where(x0 >= zero, torch.where(x0 <= W_minus_one, one, zero), zero)
+    x1_valid = torch.where(x1 >= zero, torch.where(x1 <= W_minus_one, one, zero), zero)
+    y0_valid = torch.where(y0 >= zero, torch.where(y0 <= H_minus_one, one, zero), zero)
+    y1_valid = torch.where(y1 >= zero, torch.where(y1 <= H_minus_one, one, zero), zero)
 
     if padding_mode == 'zeros':
-        wa = wa * (x0_valid.to(wa.dtype) * y0_valid.to(wa.dtype))
-        wb = wb * (x0_valid.to(wb.dtype) * y1_valid.to(wb.dtype))
-        wc = wc * (x1_valid.to(wc.dtype) * y0_valid.to(wc.dtype))
-        wd = wd * (x1_valid.to(wd.dtype) * y1_valid.to(wd.dtype))
+        # Multiplication is safe as the valid are floats
+        wa = wa * x0_valid * y0_valid
+        wb = wb * x0_valid * y1_valid
+        wc = wc * x1_valid * y0_valid
+        wd = wd * x1_valid * y1_valid
 
-    x0_idx = x0.clamp(0, W - 1).to(torch.int32)
-    y0_idx = y0.clamp(0, H - 1).to(torch.int32)
-    x1_idx = x1.clamp(0, W - 1).to(torch.int32)
-    y1_idx = y1.clamp(0, H - 1).to(torch.int32)
+    x0_idx = _clamp(x0, zero, W_minus_one).to(torch.int32)
+    y0_idx = _clamp(y0, zero, H_minus_one).to(torch.int32)
+    x1_idx = _clamp(x1, zero, W_minus_one).to(torch.int32)
+    y1_idx = _clamp(y1, zero, H_minus_one).to(torch.int32)
 
-    Ia = _gather_from_hw(src_work, x0_idx, y0_idx)
-    Ib = _gather_from_hw(src_work, x0_idx, y1_idx)
-    Ic = _gather_from_hw(src_work, x1_idx, y0_idx)
-    Id = _gather_from_hw(src_work, x1_idx, y1_idx)
+    Ia = _gather_from_hw(src, x0_idx, y0_idx)
+    Ib = _gather_from_hw(src, x0_idx, y1_idx)
+    Ic = _gather_from_hw(src, x1_idx, y0_idx)
+    Id = _gather_from_hw(src, x1_idx, y1_idx)
 
     out = (Ia * wa.unsqueeze(1) +
            Ib * wb.unsqueeze(1) +
