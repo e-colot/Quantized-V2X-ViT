@@ -81,7 +81,7 @@ class PointPillarTransformer(nn.Module):
         # n, 4 -> n, c
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
         # n, c -> N, C, H, W
-        spatial_features = self.scatter(voxel_coords, record_len, pillar_features)
+        spatial_features = self.scatter(voxel_coords, pillar_features)
         spatial_features_2d = self.backbone(spatial_features)
         # downsample feature to reduce memory
         if self.shrink_flag:
