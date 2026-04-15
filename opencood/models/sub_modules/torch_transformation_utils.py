@@ -328,16 +328,21 @@ def get_rotation_matrix2d(M: torch.Tensor, dsize: Tuple[int, int]):
         R : torch.Tensor
             Rotation matrix with shape :math:`(B, 2, 3)`.
     """
-    H, W = dsize
+    device = 'cuda'
+    dtype = M.dtype
+
+    H = torch.tensor(dsize[0], dtype=dtype, device=device)
+    W = torch.tensor(dsize[1], dtype=dtype, device=device)
     B = M.shape[0]
-    center = torch.tensor([W / 2, H / 2], dtype=M.dtype, device='cuda').unsqueeze(0)
-    shift_m = eye_like(3, B, device='cuda', dtype=M.dtype)
+
+    center = torch.stack([W, H]).to(dtype) * 0.5
+    shift_m = eye_like(3, B, device=device, dtype=dtype)
     shift_m[:, :2, 2] = center
 
-    shift_m_inv = eye_like(3, B, device='cuda', dtype=M.dtype)
+    shift_m_inv = eye_like(3, B, device=device, dtype=dtype)
     shift_m_inv[:, :2, 2] = -center
 
-    rotat_m = eye_like(3, B, device='cuda', dtype=M.dtype)
+    rotat_m = eye_like(3, B, device=device, dtype=dtype)
     rotat_m[:, :2, :2] = M[:, :2, :2]
     affine_m = shift_m @ rotat_m @ shift_m_inv
     return affine_m[:, :2, :]  # Bx2x3

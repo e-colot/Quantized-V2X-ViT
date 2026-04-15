@@ -25,13 +25,13 @@ from opencood.tools import train_utils
 @dataclass
 class Arguments:
     model_dir: str = "opencood/v2x-vit"
-    output_dir: str = "tensorRT/tranformation_utils_debug/engines"
-    log_dir: str = "tensorRT/tranformation_utils_debug/logs"
+    output_dir: str = "tensorRT/transformation_utils_debug/engines"
+    log_dir: str = "tensorRT/transformation_utils_debug/logs"
     precision: str = "fp32"
     max_cavs: int = 5
 
 
-class StageGetDiscretizedTransformationMatrix(torch.nn.Module):
+class FunctionGetDiscretizedTransformationMatrix(torch.nn.Module):
     def __init__(self, discrete_ratio: float, downsample_rate: float):
         super().__init__()
         self.discrete_ratio = float(discrete_ratio)
@@ -45,7 +45,7 @@ class StageGetDiscretizedTransformationMatrix(torch.nn.Module):
         )
 
 
-class StageGetTransformationMatrix(torch.nn.Module):
+class FunctionGetTransformationMatrix(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
         self.dsize = (int(h), int(w))
@@ -54,7 +54,7 @@ class StageGetTransformationMatrix(torch.nn.Module):
         return get_transformation_matrix(dist_correction_matrix.reshape(-1, 2, 3), self.dsize)
 
 
-class StageGetRotatedROI(torch.nn.Module):
+class FunctionGetRotatedROI(torch.nn.Module):
     def __init__(self, b: int, l: int, c: int, h: int, w: int):
         super().__init__()
         self.shape = (int(b), int(l), int(c), int(h), int(w))
@@ -63,12 +63,12 @@ class StageGetRotatedROI(torch.nn.Module):
         return get_rotated_roi(self.shape, correction_matrix)
 
 
-class StageCombineRoiAndCavMask(torch.nn.Module):
+class FunctionCombineRoiAndCavMask(torch.nn.Module):
     def forward(self, roi_mask, cav_mask):
         return combine_roi_and_cav_mask(roi_mask, cav_mask)
 
 
-class StageGetRoiAndCavMask(torch.nn.Module):
+class FunctionGetRoiAndCavMask(torch.nn.Module):
     def __init__(self, h: int, w: int, c: int, discrete_ratio: float, downsample_rate: float):
         super().__init__()
         self.h = int(h)
@@ -89,12 +89,12 @@ class StageGetRoiAndCavMask(torch.nn.Module):
         )
 
 
-class StageConvertAffineToHomography(torch.nn.Module):
+class FunctionConvertAffineToHomography(torch.nn.Module):
     def forward(self, affine_2x3):
         return convert_affinematrix_to_homography(affine_2x3)
 
 
-class StageNormalizeHomography(torch.nn.Module):
+class FunctionNormalizeHomography(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
         self.src_size = (int(h), int(w))
@@ -104,7 +104,7 @@ class StageNormalizeHomography(torch.nn.Module):
         return normalize_homography(homography_3x3, self.src_size, self.dst_size)
 
 
-class StageAffineGridSampleApprox(torch.nn.Module):
+class FunctionAffineGridSampleApprox(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
         self.dsize = (int(h), int(w))
@@ -120,7 +120,7 @@ class StageAffineGridSampleApprox(torch.nn.Module):
         )
 
 
-class StageWarpAffine(torch.nn.Module):
+class FunctionWarpAffine(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
         self.dsize = (int(h), int(w))
@@ -190,17 +190,17 @@ def _select_trace_dataset_index(per_sequence_shapes):
     return min(per_sequence_shapes, key=lambda item: abs(item["voxel_features"][0] - target))["dataset_idx"]
 
 
-def _write_graph_dump(log_dir: str, stage_name: str, traced_module: torch.jit.ScriptModule):
+def _write_graph_dump(log_dir: str, function_name: str, traced_module: torch.jit.ScriptModule):
     os.makedirs(log_dir, exist_ok=True)
-    graph_path = os.path.join(log_dir, f"{stage_name}.graphs.log")
+    graph_path = os.path.join(log_dir, f"{function_name}.graphs.log")
     with open(graph_path, "w", encoding="utf-8") as f:
-        f.write(f"[{stage_name}] --- traced.graph ---\n")
+        f.write(f"[{function_name}] --- traced.graph ---\n")
         f.write(str(traced_module.graph))
         f.write("\n\n")
-        f.write(f"[{stage_name}] --- traced.inlined_graph ---\n")
+        f.write(f"[{function_name}] --- traced.inlined_graph ---\n")
         f.write(str(traced_module.inlined_graph))
         f.write("\n")
-    print(f"[{stage_name}] graph dump written to {graph_path}")
+    print(f"[{function_name}] graph dump written to {graph_path}")
 
 
 def _clean_logs_dir(log_dir: str):
@@ -232,15 +232,15 @@ def _trace_module(module: torch.nn.Module, name: str, example_inputs: Sequence[t
     return traced, has_cpu_values
 
 
-def _try_convert_stage(
+def _try_convert_function(
     torch_tensorrt,
     traced_module,
-    stage_name: str,
+    function_name: str,
     trt_inputs: List,
     enabled_precisions: set,
     output_dir: str,
 ):
-    print(f"[{stage_name}] TRT conversion started")
+    print(f"[{function_name}] TRT conversion started")
     try:
         engine_bytes = torch_tensorrt.ts.convert_method_to_trt_engine(
             traced_module,
@@ -249,13 +249,13 @@ def _try_convert_stage(
             enabled_precisions=enabled_precisions,
             truncate_long_and_double=True,
         )
-        engine_path = os.path.join(output_dir, f"{stage_name}.engine")
+        engine_path = os.path.join(output_dir, f"{function_name}.engine")
         with open(engine_path, "wb") as f:
             f.write(engine_bytes)
-        print(f"[{stage_name}] TRT conversion succeeded -> {engine_path}")
+        print(f"[{function_name}] TRT conversion succeeded -> {engine_path}")
         return True, ""
     except Exception as exc:
-        print(f"[{stage_name}] TRT conversion FAILED: {exc}")
+        print(f"[{function_name}] TRT conversion FAILED: {exc}")
         return False, str(exc)
 
 
@@ -270,21 +270,21 @@ def main():
     opt = Arguments()
     assert opt.precision in ["fp16", "fp32"]
 
-    selected_stage = os.environ.get("TRT_STAGE", "all")
-    valid_stage_names = {
+    selected_function = os.environ.get("TRT_FUNCTION", "all")
+    valid_function_names = {
         "all",
-        "stage_discretized_transform",
-        "stage_transformation_matrix",
-        "stage_rotated_roi",
-        "stage_combine_roi_and_cav_mask",
-        "stage_get_roi_and_cav_mask",
-        "stage_convert_affine_to_homography",
-        "stage_normalize_homography",
-        "stage_affine_grid_sample_approx",
-        "stage_warp_affine",
+        "discretized_transform",
+        "transformation_matrix",
+        "rotated_roi",
+        "combine_roi_and_cav_mask",
+        "get_roi_and_cav_mask",
+        "convert_affine_to_homography",
+        "normalize_homography",
+        "affine_grid_sample_approx",
+        "warp_affine",
     }
-    if selected_stage not in valid_stage_names:
-        raise ValueError(f"Invalid TRT_STAGE={selected_stage}. Use one of {sorted(valid_stage_names)}")
+    if selected_function not in valid_function_names:
+        raise ValueError(f"Invalid TRT_FUNCTION={selected_function}. Use one of {sorted(valid_function_names)}")
 
     os.makedirs(opt.output_dir, exist_ok=True)
     os.makedirs(opt.log_dir, exist_ok=True)
@@ -318,138 +318,138 @@ def main():
     x = torch.randn((b, l, h, w, 256), device="cuda", dtype=torch.float32)
 
     with torch.no_grad():
-        stage_discretized_transform = StageGetDiscretizedTransformationMatrix(
+        function_discretized_transform = FunctionGetDiscretizedTransformationMatrix(
             encoder.discrete_ratio,
             encoder.downsample_rate,
         ).to("cuda").eval()
-        dist_matrix = stage_discretized_transform(spatial_correction_matrix)
+        dist_matrix = function_discretized_transform(spatial_correction_matrix)
 
-        stage_transformation_matrix = StageGetTransformationMatrix(h, w).to("cuda").eval()
-        transform_matrix = stage_transformation_matrix(dist_matrix)
+        function_transformation_matrix = FunctionGetTransformationMatrix(h, w).to("cuda").eval()
+        transform_matrix = function_transformation_matrix(dist_matrix)
 
-        stage_rotated_roi = StageGetRotatedROI(b, l, c, h, w).to("cuda").eval()
-        roi_mask = stage_rotated_roi(transform_matrix)
+        function_rotated_roi = FunctionGetRotatedROI(b, l, c, h, w).to("cuda").eval()
+        roi_mask = function_rotated_roi(transform_matrix)
 
-        stage_combine_roi_and_cav_mask = StageCombineRoiAndCavMask().to("cuda").eval()
-        combined_mask = stage_combine_roi_and_cav_mask(roi_mask, cav_mask)
+        function_combine_roi_and_cav_mask = FunctionCombineRoiAndCavMask().to("cuda").eval()
+        combined_mask = function_combine_roi_and_cav_mask(roi_mask, cav_mask)
 
-        stage_get_roi_and_cav_mask = StageGetRoiAndCavMask(
+        function_get_roi_and_cav_mask = FunctionGetRoiAndCavMask(
             h,
             w,
             c,
             encoder.discrete_ratio,
             encoder.downsample_rate,
         ).to("cuda").eval()
-        _ = stage_get_roi_and_cav_mask(cav_mask, spatial_correction_matrix)
+        _ = function_get_roi_and_cav_mask(cav_mask, spatial_correction_matrix)
 
-        stage_convert_affine_to_homography = StageConvertAffineToHomography().to("cuda").eval()
-        homography = stage_convert_affine_to_homography(transform_matrix)
+        function_convert_affine_to_homography = FunctionConvertAffineToHomography().to("cuda").eval()
+        homography = function_convert_affine_to_homography(transform_matrix)
 
-        stage_normalize_homography = StageNormalizeHomography(h, w).to("cuda").eval()
-        normalized_homography = stage_normalize_homography(homography)
+        function_normalize_homography = FunctionNormalizeHomography(h, w).to("cuda").eval()
+        normalized_homography = function_normalize_homography(homography)
 
         src = torch.randn((b * l, 1, h, w), device="cuda", dtype=torch.float32)
         theta = normalized_homography[:, :2, :]
 
-        stage_affine_grid_sample_approx = StageAffineGridSampleApprox(h, w).to("cuda").eval()
-        _ = stage_affine_grid_sample_approx(src, theta)
+        function_affine_grid_sample_approx = FunctionAffineGridSampleApprox(h, w).to("cuda").eval()
+        _ = function_affine_grid_sample_approx(src, theta)
 
-        stage_warp_affine = StageWarpAffine(h, w).to("cuda").eval()
-        _ = stage_warp_affine(src, transform_matrix)
+        function_warp_affine = FunctionWarpAffine(h, w).to("cuda").eval()
+        _ = function_warp_affine(src, transform_matrix)
 
     enabled_precisions = {torch.float16} if opt.precision == "fp16" else {torch.float32}
 
-    stages = [
+    functions = [
         (
-            "stage_discretized_transform",
-            stage_discretized_transform,
+            "discretized_transform",
+            function_discretized_transform,
             (spatial_correction_matrix,),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (spatial_correction_matrix,)),
         ),
         (
-            "stage_transformation_matrix",
-            stage_transformation_matrix,
+            "transformation_matrix",
+            function_transformation_matrix,
             (dist_matrix,),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (dist_matrix,)),
         ),
         (
-            "stage_rotated_roi",
-            stage_rotated_roi,
+            "rotated_roi",
+            function_rotated_roi,
             (transform_matrix,),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (transform_matrix,)),
         ),
         (
-            "stage_combine_roi_and_cav_mask",
-            stage_combine_roi_and_cav_mask,
+            "combine_roi_and_cav_mask",
+            function_combine_roi_and_cav_mask,
             (roi_mask, cav_mask),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (roi_mask, cav_mask)),
         ),
         (
-            "stage_get_roi_and_cav_mask",
-            stage_get_roi_and_cav_mask,
+            "get_roi_and_cav_mask",
+            function_get_roi_and_cav_mask,
             (cav_mask, spatial_correction_matrix),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (cav_mask, spatial_correction_matrix)),
         ),
         (
-            "stage_convert_affine_to_homography",
-            stage_convert_affine_to_homography,
+            "convert_affine_to_homography",
+            function_convert_affine_to_homography,
             (transform_matrix,),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (transform_matrix,)),
         ),
         (
-            "stage_normalize_homography",
-            stage_normalize_homography,
+            "normalize_homography",
+            function_normalize_homography,
             (homography,),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (homography,)),
         ),
         (
-            "stage_affine_grid_sample_approx",
-            stage_affine_grid_sample_approx,
+            "affine_grid_sample_approx",
+            function_affine_grid_sample_approx,
             (src, theta),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (src, theta)),
         ),
         (
-            "stage_warp_affine",
-            stage_warp_affine,
+            "warp_affine",
+            function_warp_affine,
             (src, transform_matrix),
             _build_trt_inputs_from_example_tensors(torch_tensorrt, (src, transform_matrix)),
         ),
     ]
 
     summary: Dict[str, Dict[str, object]] = {}
-    executed_stage_count = 0
+    executed_function_count = 0
 
-    for stage_name, stage_module, example_inputs, trt_inputs in stages:
-        if selected_stage != "all" and stage_name != selected_stage:
+    for function_name, function_module, example_inputs, trt_inputs in functions:
+        if selected_function != "all" and function_name != selected_function:
             continue
-        if executed_stage_count > 0:
+        if executed_function_count > 0:
             print("\n" + "-" * 52 + "\n")
 
-        traced, has_cpu_values = _trace_module(stage_module, stage_name, example_inputs, opt.log_dir)
-        ok, err = _try_convert_stage(
+        traced, has_cpu_values = _trace_module(function_module, function_name, example_inputs, opt.log_dir)
+        ok, err = _try_convert_function(
             torch_tensorrt,
             traced,
-            stage_name,
+            function_name,
             trt_inputs,
             enabled_precisions,
             opt.output_dir,
         )
-        summary[stage_name] = {"trt_ok": ok, "cpu_in_graph": has_cpu_values, "error": err}
-        executed_stage_count += 1
+        summary[function_name] = {"trt_ok": ok, "cpu_in_graph": has_cpu_values, "error": err}
+        executed_function_count += 1
         if not ok:
-            print(f"Stage failed but continuing for diagnostics: {stage_name}")
+            print(f"Function failed but continuing for diagnostics: {function_name}")
 
     print(f"\n{'='*15} TRANSFORMATION UTILS SUMMARY {'='*15}")
-    print(f"{'Stage':<36} | {'TRT conversion':<14} | {'CPU in graph':<12}")
+    print(f"{'Function':<36} | {'TRT conversion':<14} | {'CPU in graph':<12}")
     print("-" * 76)
-    for stage_name, info in summary.items():
+    for function_name, info in summary.items():
         status = "OK" if info["trt_ok"] else "FAILED"
         cpu_flag = "YES" if info["cpu_in_graph"] else "NO"
-        print(f"{stage_name:<36} | {status:<14} | {cpu_flag:<12}")
+        print(f"{function_name:<36} | {status:<14} | {cpu_flag:<12}")
     print("-" * 76)
 
     if not summary:
-        print(f"No stage executed for TRT_STAGE={selected_stage}")
+        print(f"No function executed for TRT_FUNCTION={selected_function}")
 
 
 if __name__ == "__main__":
