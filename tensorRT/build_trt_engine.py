@@ -276,6 +276,7 @@ def main():
         'forward',
         inputs=trt_inputs,
         enabled_precisions=enabled_precisions,
+        truncate_long_and_double=True,
     )
 
     os.makedirs(os.path.dirname(opt.engine_path), exist_ok=True)
