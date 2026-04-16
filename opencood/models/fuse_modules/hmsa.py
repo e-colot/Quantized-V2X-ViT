@@ -70,8 +70,8 @@ class HGTCavAttention(nn.Module):
         # (B*L, H*W, C) @ (B*L, C, out_C) -> (B*L, H*W, out_C)
         out = torch.bmm(x_flat, w.transpose(-1, -2)) + b.transpose(-1, -2)
 
-        # (B*L, H*W, out_C) -> (B, L, H*W, out_C) -> (B, L, H, W, out_C)
-        out = out.unflatten(0, (x.shape[0], -1)).unflatten(2, (x.shape[1], -1))
+        # (B*L, H*W, out_C) -> (B, L, H, W, out_C)
+        out = out.reshape(x.shape[0], x.shape[3], x.shape[1], x.shape[2], -1)
         # (B, L, H, W, out_C) -> (B, H, W, L, out_C)
         return out.permute(0, 2, 3, 1, 4).contiguous()
 
@@ -110,10 +110,13 @@ class HGTCavAttention(nn.Module):
 
         w_att, w_msg = self.get_hetero_edge_weights( types)
 
+        head_dim = q_in.shape[-1] // self.heads
+
+        B, H, W, L = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
         # (B, H, W, L, out_C) -> (B, H, W, L, heads, D)
-        q = q_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
-        k = k_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
-        v = v_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
+        q = q_in.reshape(B, H, W, L, self.heads, head_dim).permute(0, 4, 1, 2, 3, 5).contiguous()
+        k = k_in.reshape(B, H, W, L, self.heads, head_dim).permute(0, 4, 1, 2, 3, 5).contiguous()
+        v = v_in.reshape(B, H, W, L, self.heads, head_dim).permute(0, 4, 1, 2, 3, 5).contiguous()
 
         # Attention Map (Einsum is TRT-friendly in recent versions)
         q_w = torch.einsum('bmhwip,bmijpq->bmhwijq', q, w_att)

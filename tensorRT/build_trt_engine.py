@@ -163,27 +163,36 @@ def _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes):
 
 def _build_trt_inputs(opt, torch_tensorrt):
     return [
+        # 1. voxel_features
         torch_tensorrt.Input(
             min_shape=(opt.min_num_voxels, opt.max_points_per_voxel, opt.num_point_features),
             opt_shape=(opt.opt_num_voxels, opt.max_points_per_voxel, opt.num_point_features),
             max_shape=(opt.max_num_voxels, opt.max_points_per_voxel, opt.num_point_features),
             dtype=torch.float32,
+            name="voxel_features"
         ),
+        # 2. voxel_coords
         torch_tensorrt.Input(
             min_shape=(opt.min_num_voxels, 4),
             opt_shape=(opt.opt_num_voxels, 4),
             max_shape=(opt.max_num_voxels, 4),
             dtype=torch.int32,
+            name="voxel_coords"
         ),
+        # 3. voxel_num_points (THE CRITICAL ONE)
         torch_tensorrt.Input(
             min_shape=(opt.min_num_voxels,),
             opt_shape=(opt.opt_num_voxels,),
             max_shape=(opt.max_num_voxels,),
-            dtype=torch.int32,
+            dtype=torch.float32, 
+            name="voxel_num_points"
         ),
-        torch_tensorrt.Input(shape=(1,), dtype=torch.int32),
-        torch_tensorrt.Input(shape=(1, opt.max_cavs, 3), dtype=torch.float32),
-        torch_tensorrt.Input(shape=(1, opt.max_cavs, 4, 4), dtype=torch.float32),
+        # 4. record_len
+        torch_tensorrt.Input(shape=(1,), dtype=torch.int32, name="record_len"),
+        # 5. prior_encoding
+        torch_tensorrt.Input(shape=(1, opt.max_cavs, 3), dtype=torch.float32, name="prior_encoding"),
+        # 6. spatial_correction_matrix (Matches your inference call order)
+        torch_tensorrt.Input(shape=(1, opt.max_cavs, 4, 4), dtype=torch.float32, name="spatial_correction_matrix"),
     ]
 
 
@@ -209,7 +218,6 @@ def _write_graph_dump(graph_log_path: str, traced_module: torch.jit.ScriptModule
         f.write('\n')
     print(f'TorchScript graph dump written to: {graph_log_path}')
 
-
 def _prepare_torchscript_module(adapter, opt, hypes):
     # Try Scripting first if enabled
     if opt.try_script_first:
@@ -233,10 +241,28 @@ def _prepare_torchscript_module(adapter, opt, hypes):
 
     try:
         # Trace the model
-        traced_adapter = torch.jit.trace(
-            adapter, 
-            trace_inputs
-        )
+        traced_adapter = torch.jit.trace(adapter, trace_inputs)
+
+# ----------------------- START GRAPH CLEANUP -----------------------
+        # 1. Inline everything to resolve scope-based naming collisions
+        torch._C._jit_pass_inline(traced_adapter.graph)
+        # 2. CRITICAL: De-fuse cuDNN ops back into standard Conv + ReLU
+        # This prevents the 'aten::cudnn_convolution_relu' error
+        pattern = """
+            graph(%input, %weight, %bias, %stride, %padding, %dilation, %groups):
+                %res = aten::cudnn_convolution_relu(%input, %weight, %bias, %stride, %padding, %dilation, %groups)
+                return (%res)
+        """
+        replacement = """
+            graph(%input, %weight, %bias, %stride, %padding, %dilation, %groups):
+                %transposed : bool = prim::Constant[value=0]()
+                %conv = aten::convolution(%input, %weight, %bias, %stride, %padding, %dilation, %transposed, %groups)
+                %res = aten::relu(%conv)
+                return (%res)
+        """
+        torch._C._jit_pass_custom_pattern_based_rewrite_graph(pattern, replacement, traced_adapter.graph)
+# ----------------------- GRAPH CLEANUP DONE -----------------------
+        
         print("Successfully traced the adapter.")
 
         _write_graph_dump(opt.graph_log_path, traced_adapter)
@@ -282,21 +308,23 @@ def main():
     enabled_precisions = {torch.float16} if opt.precision == 'fp16' else {torch.float32}
     trt_inputs = _build_trt_inputs(opt, torch_tensorrt)
 
-    print('Converting TorchScript module to TensorRT engine bytes...')
-    engine_bytes = torch_tensorrt.ts.convert_method_to_trt_engine(
+    print('Converting model using unified compile API...')
+    
+    # trt_inputs is already built correctly in your script
+    
+    trt_model = torch_tensorrt.compile(
         scripted,
-        'forward',
+        ir="ts", # This tells it to use the TorchScript backend
         inputs=trt_inputs,
         enabled_precisions=enabled_precisions,
         truncate_long_and_double=True,
-        allow_shape_tensors=True,
+        require_full_compilation=False,
+        workspace_size=1 << 33, # 8GB
     )
 
-    os.makedirs(os.path.dirname(opt.engine_path), exist_ok=True)
-    with open(opt.engine_path, 'wb') as f:
-        f.write(engine_bytes)
-
-    print(f'TensorRT engine saved to: {opt.engine_path}')
+    # Instead of engine_bytes, we save the compiled module
+    print(f'Saving compiled TRT model to {opt.engine_path}.ts')
+    torch.jit.save(trt_model, opt.engine_path + ".ts")
 
 
 if __name__ == '__main__':

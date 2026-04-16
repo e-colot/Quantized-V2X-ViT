@@ -1,4 +1,4 @@
-version: 7
+version: 8
 
 # Use exact mappings when one old key should become exactly one new key.
 rename_exact: []
@@ -87,8 +87,7 @@ ignore_missing_keys_regex:
   # TensorRT-specific buffer added to PyramidWindowAttention.
   - '\.num_windows_tensor$'
   # BaseWindowAttention runtime buffers for TensorRT-friendly graph state.
-  - '\.heads$'
-  - '\.window_size$'
+  - '\.heads_tensor$'
   - '\.rel_idx_1d$'
   - '\.scale$'
   # STTF runtime buffers added for TensorRT-friendly graph state.

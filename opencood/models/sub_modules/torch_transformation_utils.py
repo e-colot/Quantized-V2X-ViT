@@ -67,10 +67,12 @@ def combine_roi_and_cav_mask(roi_mask, cav_mask):
     com_mask: torch.Tensor
         Combined mask.
     """
+    B, L, C, H, W = roi_mask.shape[0], roi_mask.shape[1], roi_mask.shape[2], roi_mask.shape[3], roi_mask.shape[4]
+
     # (B, L, 1, 1, 1)
     cav_mask = cav_mask.unsqueeze(2).unsqueeze(3).unsqueeze(4)
     # (B, L, C, H, W)
-    cav_mask = cav_mask.expand(roi_mask.shape)
+    cav_mask = cav_mask.expand(B, L, C, H, W)
     # (B, L, C, H, W)
     com_mask = roi_mask * cav_mask
     return com_mask
@@ -99,7 +101,7 @@ def get_rotated_roi(input: torch.Tensor, spatial_size: torch.Tensor, correction_
     # To reduce the computation, we only need to calculate the
     # mask for the first channel.
     # (B,L,1,H,W)
-    x = torch.ones_like(input)
+    x = torch.ones(input.shape, device='cuda', dtype=input.dtype)
     # (B*L,1,H,W)
     roi_mask = warp_affine(x.reshape(-1, 1, input.shape[3], input.shape[4]), correction_matrix,
                            dsize=spatial_size, mode="bilinear") # was mode='nearest'
@@ -559,10 +561,15 @@ def _affine_grid_sample_approx_bilinear_sample(
     wc = (x - x0) * (y1 - y)
     wd = (x - x0) * (y - y0)
     
-    x0_valid = torch.where(x0 >= zero, torch.where(x0 <= W_minus_one, one, zero), zero)
-    x1_valid = torch.where(x1 >= zero, torch.where(x1 <= W_minus_one, one, zero), zero)
-    y0_valid = torch.where(y0 >= zero, torch.where(y0 <= H_minus_one, one, zero), zero)
-    y1_valid = torch.where(y1 >= zero, torch.where(y1 <= H_minus_one, one, zero), zero)
+    # x0_valid = torch.where(x0 >= zero, torch.where(x0 <= W_minus_one, one, zero), zero)
+    # x1_valid = torch.where(x1 >= zero, torch.where(x1 <= W_minus_one, one, zero), zero)
+    # y0_valid = torch.where(y0 >= zero, torch.where(y0 <= H_minus_one, one, zero), zero)
+    # y1_valid = torch.where(y1 >= zero, torch.where(y1 <= H_minus_one, one, zero), zero)
+    # To avoid duplicate nodes in graph
+    x0_valid = torch.where(x0 >= zero, torch.where(x0 <= W_minus_one, torch.ones_like(x0), torch.zeros_like(x0)), torch.zeros_like(x0))
+    x1_valid = torch.where(x1 >= zero, torch.where(x1 <= W_minus_one, torch.ones_like(x1), torch.zeros_like(x1)), torch.zeros_like(x1))
+    y0_valid = torch.where(y0 >= zero, torch.where(y0 <= H_minus_one, torch.ones_like(y0), torch.zeros_like(y0)), torch.zeros_like(y0))
+    y1_valid = torch.where(y1 >= zero, torch.where(y1 <= H_minus_one, torch.ones_like(y1), torch.zeros_like(y1)), torch.zeros_like(y1))
 
     if padding_mode == 'zeros':
         # Multiplication is safe as the valid are floats

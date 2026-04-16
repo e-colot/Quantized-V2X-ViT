@@ -141,5 +141,6 @@ spconv/
 .vscode/
 opencood/v2x-vit/eval.yaml
 tensorRT/**/*.engine
+tensorRT/**/*.ts
 tensorRT/**/*.plan
 tensorRT/**/*.trt

@@ -17,19 +17,14 @@ class PointPillarScatter(nn.Module):
         self.nz = torch.tensor([grid_size[2]], dtype=torch.int32, device=device)
 
         self.num_pixels = self.ny * self.nx
-        self.total_elements = self.max_cav * self.num_pixels
         
         assert self.nz == 1
 
     def forward(self, voxel_coords, pillar_features):
-        device = 'cuda'
-        dtype = pillar_features.dtype
-
         indices = (voxel_coords[:, 0] * self.num_pixels + voxel_coords[:, 2] * self.nx + voxel_coords[:, 3])
 
         # canvas: [C, B*max_cav*H*W]
-        canvas = torch.zeros((self.num_bev_features, self.total_elements),
-                             dtype=dtype, device=device)
+        canvas = pillar_features.new_zeros((self.num_bev_features, self.nx * self.ny * self.max_cav))
 
         indices_expanded = indices.unsqueeze(0).expand(self.num_bev_features, -1)
         canvas.scatter_(1, indices_expanded, pillar_features.t())

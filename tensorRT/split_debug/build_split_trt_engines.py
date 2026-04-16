@@ -330,17 +330,18 @@ def _try_convert_stage(
 ):
     print(f"[{stage_name}] TRT conversion started")
     try:
-        engine_bytes = torch_tensorrt.ts.convert_method_to_trt_engine(
+        trt_module = torch_tensorrt.compile(
             traced_module,
-            "forward",
+            ir="ts",
             inputs=trt_inputs,
             enabled_precisions=enabled_precisions,
             truncate_long_and_double=True,
+            require_full_compilation=False,
+            workspace_size=1 << 33,
         )
-        engine_path = os.path.join(output_dir, f"{stage_name}.engine")
-        with open(engine_path, "wb") as f:
-            f.write(engine_bytes)
-        print(f"[{stage_name}] TRT conversion succeeded -> {engine_path}")
+        module_path = os.path.join(output_dir, f"{stage_name}.ts")
+        torch.jit.save(trt_module, module_path)
+        print(f"[{stage_name}] TRT conversion succeeded -> {module_path}")
         return True, ""
     except Exception as exc:
         print(f"[{stage_name}] TRT conversion FAILED: {exc}")

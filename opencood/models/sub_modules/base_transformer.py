@@ -91,7 +91,11 @@ class CavAttention(nn.Module):
 
     def forward(self, x, mask, prior_encoding):
         # x: (B, L, H, W, C) -> (B, H, W, L, C)
-        B, L, H, W, C = x.shape
+        B = x.shape[0]
+        L = x.shape[1]
+        H = x.shape[2]
+        W = x.shape[3]
+        C = x.shape[4]
         M = self.heads
         D = C // M  # Head dimension
         

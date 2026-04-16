@@ -21,7 +21,8 @@ class BaseWindowAttention(nn.Module):
         super().__init__()
         inner_dim = dim_head * heads
 
-        self.register_buffer('heads', torch.tensor(heads, dtype=torch.int32, device='cuda'))
+        self.heads = heads
+        self.register_buffer('heads_tensor', torch.tensor(heads, dtype=torch.int32, device='cuda'))
         self.register_buffer('scale', torch.tensor(dim_head ** -0.5, dtype=torch.float32, device='cuda'))
         self.window_size = window_size
         self.relative_pos_embedding = relative_pos_embedding
@@ -50,34 +51,43 @@ class BaseWindowAttention(nn.Module):
 
     def forward(self, x):
         # x shape: (b, l, h, w, c)
+        b = x.shape[0]
+        l = x.shape[1]
+        h = x.shape[2]
+        w = x.shape[3]
+        ws = self.window_size
+        new_h = h // ws
+        new_w = w // ws
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
 
-        q_in, k, v = qkv
+        q, k, v = qkv
         # all above are (b, l, h, w, c)
+
+        head_dim = q.shape[-1] // self.heads
      
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        q_in = q_in.unflatten(2, (-1, self.window_size)).unflatten(4, (-1, self.window_size))
+        q = q.reshape(b, l, new_h, ws, new_w, ws, -1)
         # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
-        q = q_in.unflatten(6, (self.heads, -1))
+        q = q.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
         # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
         q = q.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
         # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
         q = q.flatten(3, 4).flatten(4, 5)
 
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        k = k.unflatten(2, (-1, self.window_size)).unflatten(4, (-1, self.window_size))
+        k = k.reshape(b, l, new_h, ws, new_w, ws, -1)
         # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
-        k = k.unflatten(6, (self.heads, -1))
+        k = k.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
         # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
         k = k.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
         # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
         k = k.flatten(3, 4).flatten(4, 5)
                 
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        v = v.unflatten(2, (-1, self.window_size)).unflatten(4, (-1, self.window_size))
+        v = v.reshape(b, l, new_h, ws, new_w, ws, -1)
         # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
-        v = v.unflatten(6, (self.heads, -1))
+        v = v.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
         # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
         v = v.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
         # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
@@ -102,7 +112,7 @@ class BaseWindowAttention(nn.Module):
         out = torch.matmul(attn, v)
 
         # (b, l, heads, new_h*new_w, w_size*w_size, c_head) -> (b, l, heads, new_h, new_w, w_size, w_size, c_head)
-        out = out.unflatten(3, (q_in.shape[2], -1)).unflatten(5, (self.window_size, self.window_size))
+        out = out.reshape(b, l, self.heads, new_h, new_w, ws, ws, -1)
         # (b, l, heads, new_h, new_w, w_size, w_size, c_head) -> (b, l, new_h, w_size, new_w, w_size, heads, c_head)
         out = out.permute(0, 1, 3, 5, 4, 6, 2, 7).contiguous()
         # (b, l, new_h, w_size, new_w, w_size, heads, c_head) -> (b, l, new_h*w_size, new_w*w_size, heads*c_head)

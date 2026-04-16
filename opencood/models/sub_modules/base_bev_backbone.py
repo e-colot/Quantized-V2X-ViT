@@ -46,7 +46,7 @@ class BaseBEVBackbone(nn.Module):
                 nn.BatchNorm2d(num_filters[idx], eps=1e-3, momentum=0.01),
                 nn.ReLU()
             ]
-            for k in range(layer_nums[idx]):
+            for _ in range(layer_nums[idx]):
                 cur_layers.extend([
                     nn.Conv2d(num_filters[idx], num_filters[idx],
                               kernel_size=3, padding=1, bias=False),
