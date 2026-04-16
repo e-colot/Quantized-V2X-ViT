@@ -20,9 +20,12 @@ class STTF(nn.Module):
         self.register_buffer('downsample_rate', torch.tensor(float(args['downsample_rate'])))
 
     def forward(self, x, spatial_correction_matrix):
+        device = 'cuda'
+        orig_shape = x.shape # (B, L, H, W, C)
+
         # x shape: (B, L, H, W, C) -> (B, L, C, H, W)
         x = x.permute(0, 1, 4, 2, 3)
-        B, L, C, H, W = x.shape
+        spatial_size = torch.tensor([orig_shape[2], orig_shape[3]], device=device)
 
         dist_correction_matrix = get_discretized_transformation_matrix(
             spatial_correction_matrix, 
@@ -31,13 +34,13 @@ class STTF(nn.Module):
         )
 
         matrices = dist_correction_matrix.reshape(-1, 2, 3)
-        T = get_transformation_matrix(matrices, (H, W))
+        T = get_transformation_matrix(matrices, spatial_size)
         
-        x_flat = x.reshape(-1, C, H, W)
-        x_warped = warp_affine(x_flat, T, (H, W))
+        x_flat = x.reshape(-1, orig_shape[4], orig_shape[2], orig_shape[3])
+        x_warped = warp_affine(x_flat, T, spatial_size)
         
         # (B*L, C, H, W) -> (B, L, C, H, W) -> (B, L, H, W, C)
-        x = x_warped.view(B, L, C, H, W)
+        x = x_warped.view(x.shape)
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         
         return x

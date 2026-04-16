@@ -38,13 +38,16 @@ def get_roi_and_cav_mask(shape: Tuple[int, int, int, int, int], cav_mask: torch.
     H = shape[2]
     W = shape[3]
     C = 1
+
+    spatial_size = torch.tensor([shape[2], shape[3]], device='cuda', dtype=torch.int32)
+
     # (B,L,4,4)
     dist_correction_matrix = get_discretized_transformation_matrix(
         spatial_correction_matrix, discrete_ratio,
         downsample_rate)
     # (B*L,2,3)
     T = get_transformation_matrix(
-        dist_correction_matrix.reshape(-1, 2, 3), (H, W))
+        dist_correction_matrix.reshape(-1, 2, 3), spatial_size)
     # (B,L,1,H,W)
     roi_mask = get_rotated_roi((B, L, C, H, W), T)
     # (B,L,1,H,W)
@@ -96,13 +99,16 @@ def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: to
         Rotated ROI mask with shape (N,2,3).
     """
     B, L, C, H, W = shape
+
+    spatial_size = torch.tensor([H, W], device='cuda', dtype=torch.int32)
+
     # To reduce the computation, we only need to calculate the
     # mask for the first channel.
     # (B,L,1,H,W)
     x = torch.ones((B, L, 1, H, W), dtype=correction_matrix.dtype, device='cuda')
     # (B*L,1,H,W)
     roi_mask = warp_affine(x.reshape(-1, 1, H, W), correction_matrix,
-                           dsize=(H, W), mode="bilinear") # was mode='nearest'
+                           dsize=spatial_size, mode="bilinear") # was mode='nearest'
     # going from 'nearest' to 'bilinear' lost 0.02% AP @ IOU 0.7 (0% elesewhere)
     # -> acceptable loss
 
@@ -206,13 +212,13 @@ def _torch_inverse_cast(input):
 
 
 def normal_transform_pixel(
-        height: int, width: int, device: torch.device, dtype: torch.dtype):
+        height: torch.tensor, width: torch.tensor, device: torch.device, dtype: torch.dtype):
     r"""
     Compute the normalization matrix from image size in pixels to [-1, 1].
     Args:
-        height : int
+        height : torch.tensor (scalar)
             Image height.
-        width : int
+        width : torch.tensor (scalar)
             Image width.
         device : torch.device
             Output tensor devices.
@@ -225,9 +231,6 @@ def normal_transform_pixel(
         tr_mat : torch.Tensor
             Normalized transform with shape :math:`(1, 3, 3)`.
     """
-    width = torch.tensor(width, dtype=dtype, device=device)
-    height = torch.tensor(height, dtype=dtype, device=device)
-
     eps = torch.tensor(1e-14, dtype=dtype, device=device)
     zero = torch.tensor(0.0, dtype=dtype, device=device)
     neg_one = torch.tensor(-1.0, dtype=dtype, device=device)
@@ -278,16 +281,16 @@ def eye_like(n: int, B: torch.Tensor, device: torch.device, dtype: torch.dtype):
     return identity.unsqueeze(0).expand(B.shape[0], -1, -1).contiguous()
 
 
-def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[int, int], dsize_dst: Tuple[int, int]):
+def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: torch.Tensor, dsize_dst: torch.Tensor):
     r"""
     Normalize a given homography in pixels to [-1, 1].
     Args:
         dst_pix_trans_src_pix : torch.Tensor
             Homography/ies from source to destination to be normalized with
             shape :math:`(B, 3, 3)`.
-        dsize_src : Tuple[int, int]
+        dsize_src : torch.Tensor
             Size of the source image (height, width).
-        dsize_dst : Tuple[int, int]
+        dsize_dst : torch.Tensor
             Size of the destination image (height, width).
 
     Returns:
@@ -295,8 +298,8 @@ def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[i
             The normalized homography of shape :math:`(B, 3, 3)`.
     """
     # source and destination sizes
-    src_h, src_w = dsize_src
-    dst_h, dst_w = dsize_dst
+    src_h, src_w = dsize_src[0], dsize_src[1]
+    dst_h, dst_w = dsize_dst[0], dsize_dst[1]
     device = 'cuda'
     dtype = dst_pix_trans_src_pix.dtype
     # compute the transformation pixel/norm for src/dst
@@ -314,13 +317,13 @@ def normalize_homography(dst_pix_trans_src_pix: torch.Tensor, dsize_src: Tuple[i
     return dst_norm_trans_src_norm
 
 
-def get_rotation_matrix2d(M: torch.Tensor, dsize: Tuple[int, int]):
+def get_rotation_matrix2d(M: torch.Tensor, dsize: torch.Tensor):
     r"""
     Return rotation matrix for torch.affine_grid based on transformation matrix.
     Args:
         M : torch.Tensor
             Transformation matrix with shape :math:`(B, 2, 3)`.
-        dsize : Tuple[int, int]
+        dsize : torch.Tensor
             Size of the source image (height, width).
 
     Returns:
@@ -331,8 +334,8 @@ def get_rotation_matrix2d(M: torch.Tensor, dsize: Tuple[int, int]):
     dtype = M.dtype
     B = M.shape[0]
 
-    H = torch.tensor(dsize[0], dtype=dtype, device=device)
-    W = torch.tensor(dsize[1], dtype=dtype, device=device)
+    H = dsize[0].to(dtype)
+    W = dsize[1].to(dtype)
     two = torch.tensor(2.0, dtype=dtype, device=device)
 
     cx = W / two
@@ -369,20 +372,20 @@ def get_rotation_matrix2d(M: torch.Tensor, dsize: Tuple[int, int]):
     return affine_m[:, :2, :]
 
 
-def get_transformation_matrix(M, dsize: Tuple[int, int]):
+def get_transformation_matrix(M, spatial_size: torch.Tensor):
     r"""
     Return transformation matrix for torch.affine_grid.
     Args:
         M : torch.Tensor
             Transformation matrix with shape :math:`(N, 2, 3)`.
-        dsize : Tuple[int, int]
+        spatial_size : torch.Tensor
             Size of the source image (height, width).
 
     Returns:
         T : torch.Tensor
             Transformation matrix with shape :math:`(N, 2, 3)`.
     """
-    T = get_rotation_matrix2d(M, dsize)
+    T = get_rotation_matrix2d(M, spatial_size)
     T[..., 2] += M[..., 2]
     return T
 
@@ -448,14 +451,14 @@ def _gather_from_hw(src, x_idx, y_idx):
 
 def _affine_grid_sample_approx_prepare_norm_grid(
         theta: torch.Tensor,
-        dsize: Tuple[int, int],
+        dsize: torch.Tensor,
         align_corners: bool = True):
     """Build normalized sampling grid of shape (B, H_out, W_out, 2)."""
     device = 'cuda'
     grid_dtype = theta.dtype
 
-    H_out = torch.tensor(dsize[0], device=device, dtype=grid_dtype)
-    W_out = torch.tensor(dsize[1], device=device, dtype=grid_dtype)
+    H_out = dsize[0].to(grid_dtype)
+    W_out = dsize[1].to(grid_dtype)
     eps = torch.tensor(1e-14, device=device, dtype=grid_dtype)
     one = torch.tensor(1.0, device=device, dtype=grid_dtype)
     two = torch.tensor(2.0, device=device, dtype=grid_dtype)
@@ -578,7 +581,7 @@ def _affine_grid_sample_approx_bilinear_sample(
     return out
 
 
-def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tuple[int, int],
+def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: torch.Tensor,
                               mode: str = 'bilinear',
                               padding_mode: str = 'zeros',
                               align_corners: bool = True):
@@ -590,7 +593,7 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tup
         theta: torch.Tensor 
             Affine transformation matrix of shape (B, 2, 3) containing
             the 2x3 affine transformation parameters.
-        dsize: Tuple[int, int] 
+        dsize: torch.Tensor 
             Output spatial dimensions as (H_out, W_out).
         [mode]: str
             Interpolation mode. Either 'bilinear' or 'nearest'.
@@ -629,7 +632,7 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: Tup
 
 
 def warp_affine(
-        src:torch.Tensor, M:torch.Tensor, dsize:Tuple[int, int],
+        src:torch.Tensor, M:torch.Tensor, dsize: torch.Tensor,
         mode:str='bilinear',
         padding_mode:str='zeros',
         align_corners:bool=True):
@@ -640,24 +643,24 @@ def warp_affine(
             Input feature map with shape :math:`(B,C,H,W)`.
         M : torch.Tensor
             Transformation matrix with shape :math:`(B,2,3)`.
-        dsize : tuple
+        dsize : torch.Tensor
             Tuple of output image H_out and W_out.
         mode : str
             Interpolation methods for F.grid_sample.
         padding_mode : str
             Padding methods for F.grid_sample.
-        align_corners : boolean
+        align_corners : bool
             Parameter of F.affine_grid.
 
     Returns:
         Transformed features with shape :math:`(B,C,H,W)`.
     """
 
-    B, C, H, W = src.size()
+    in_size = torch.tensor([src.shape[2], src.shape[3]], device='cuda', dtype=torch.int32)
 
     # we generate a 3x3 transformation matrix from 2x3 affine
     M_3x3 = convert_affinematrix_to_homography(M)
-    dst_norm_trans_src_norm = normalize_homography(M_3x3, (H, W), dsize)
+    dst_norm_trans_src_norm = normalize_homography(M_3x3, in_size, dsize)
 
     # src_norm_trans_dst_norm = torch.inverse(dst_norm_trans_src_norm)
     src_norm_trans_dst_norm = _3x3_cramer_inverse(dst_norm_trans_src_norm)
@@ -668,72 +671,3 @@ def warp_affine(
                                      mode=mode,
                                      padding_mode=padding_mode,
                                      align_corners=align_corners)
-
-
-class Test:
-    """
-    Test the transformation in this file.
-    The methods in this class are not supposed to be used outside of this file.
-    """
-
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def load_img():
-        torch.manual_seed(0)
-        x = torch.randn(1, 5, 16, 400, 200) * 100
-        # x = torch.ones(1, 5, 16, 400, 200)
-        return x
-
-    @staticmethod
-    def load_raw_transformation_matrix(N):
-        a = 90 / 180 * np.pi
-        matrix = torch.Tensor([[np.cos(a), -np.sin(a), 10],
-                               [np.sin(a), np.cos(a), 10]])
-        matrix = torch.repeat_interleave(matrix.unsqueeze(0).unsqueeze(0), N,
-                                         dim=1)
-        return matrix
-
-    @staticmethod
-    def load_raw_transformation_matrix2(N, alpha):
-        a = alpha / 180 * np.pi
-        matrix = torch.Tensor([[np.cos(a), -np.sin(a), 0, 0],
-                               [np.sin(a), np.cos(a), 0, 0]])
-        matrix = torch.repeat_interleave(matrix.unsqueeze(0).unsqueeze(0), N,
-                                         dim=1)
-        return matrix
-
-    @staticmethod
-    def test():
-        img = Test.load_img()
-        B, L, C, H, W = img.shape
-        raw_T = Test.load_raw_transformation_matrix(5)
-        T = get_transformation_matrix(raw_T.reshape(-1, 2, 3), (H, W))
-        img_rot = warp_affine(img.reshape(-1, C, H, W), T, (H, W))
-        print(img_rot[0, 0, :, :])
-        plt.matshow(img_rot[0, 0, :, :])
-        plt.show()
-
-    @staticmethod
-    def test_combine_roi_and_cav_mask():
-        B = 2
-        L = 5
-        C = 16
-        H = 300
-        W = 400
-        # 2, 5
-        cav_mask = torch.Tensor([[1, 1, 1, 0, 0], [1, 0, 0, 0, 0]])
-        x = torch.zeros(B, L, C, H, W)
-        correction_matrix = Test.load_raw_transformation_matrix2(5, 10)
-        correction_matrix = torch.cat([correction_matrix, correction_matrix],
-                                      dim=0)
-        mask = get_roi_and_cav_mask((B, L, H, W, C), cav_mask, 
-                                    correction_matrix, 0.4, 4)
-        plt.matshow(mask[0, :, :, 0, 0])
-        plt.show()
-
-
-if __name__ == "__main__":
-    os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-    Test.test_combine_roi_and_cav_mask()
