@@ -369,11 +369,20 @@ def _build_inputs_backbone(opt, torch_tensorrt):
         ),
     ]
 
-def _build_trt_inputs_from_example_tensors(torch_tensorrt, example_tensors: Sequence[torch.Tensor]):
-    return [
-        torch_tensorrt.Input(shape=tuple(tensor.shape), dtype=tensor.dtype)
-        for tensor in example_tensors
-    ]
+def _build_trt_inputs_from_example_tensors(torch_tensorrt, example_inputs):
+    trt_inputs = []
+    for x in example_inputs:
+        # Check if it's an integer tensor or boolean
+        if x.dtype == torch.int64 or x.dtype == torch.bool:
+            dtype = torch.int32
+        else:
+            dtype = x.dtype
+            
+        trt_inputs.append(torch_tensorrt.Input(
+            shape=x.shape,
+            dtype=dtype # Explicitly enforce Int32 here
+        ))
+    return trt_inputs
 
 
 def _build_inputs_regroup(torch_tensorrt, n_min, n_opt, n_max, c, h, w, max_cavs):

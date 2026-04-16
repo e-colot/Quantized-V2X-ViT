@@ -133,7 +133,10 @@ def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: 
         including 2D transformation and 2D rotation.
 
     """
-    matrix = matrix[:, :, [0, 1], :][:, :, :, [0, 1, 3]]
+    idx1 = torch.tensor([0, 1], dtype=torch.int32, device='cuda')
+    idx2 = torch.tensor([0, 1, 3], dtype=torch.int32, device='cuda')
+
+    matrix = matrix[:, :, idx1, :][:, :, :, idx2]
     # normalize the x,y transformation
     matrix[:, :, :, -1] = matrix[:, :, :, -1] \
                           / (discrete_ratio * downsample_rate)

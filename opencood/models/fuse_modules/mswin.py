@@ -23,17 +23,22 @@ class BaseWindowAttention(nn.Module):
 
         self.register_buffer('heads', torch.tensor(heads, dtype=torch.int32, device='cuda'))
         self.register_buffer('scale', torch.tensor(dim_head ** -0.5, dtype=torch.float32, device='cuda'))
-        self.register_buffer('window_size', torch.tensor(window_size, dtype=torch.int32, device='cuda'))
+        self.window_size = window_size
         self.relative_pos_embedding = relative_pos_embedding
-        self.register_buffer('relative_indices', torch.empty((0, 0, 2), dtype=torch.int32, device='cuda'))
 
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
 
-        if self.relative_pos_embedding:
-            self.relative_indices = (get_relative_distances(window_size) +
-                                     window_size - 1).to(dtype=torch.int32, device='cuda')
-            self.pos_embedding = nn.Parameter(torch.randn(2 * window_size - 1,
-                                                          2 * window_size - 1))
+        if self.relative_pos_embedding:            
+            stride = 2 * window_size - 1
+            rel_coords = get_relative_distances(window_size) + window_size - 1
+            indices_1d = rel_coords[:, :, 0] * stride + rel_coords[:, :, 1]
+            
+            # Register the INDEX MAP as a buffer (TensorRT constant)
+            self.register_buffer('rel_idx_1d', indices_1d.flatten().long())
+            
+            # This matches your trained checkpoint shape
+            self.pos_embedding = nn.Parameter(torch.randn(stride, stride))
+            self.pos_enc_shape = torch.tensor([self.window_size**2, self.window_size**2], dtype=torch.int32, device='cuda')
         else:
             self.pos_embedding = nn.Parameter(torch.randn(window_size ** 2,
                                                           window_size ** 2))
@@ -45,53 +50,63 @@ class BaseWindowAttention(nn.Module):
 
     def forward(self, x):
         # x shape: (b, l, h, w, c)
-        b, l, h, w = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
-        new_h = h // self.window_size
-        new_w = w // self.window_size
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q_in, k_in, v_in = qkv
-        c_head = q_in.shape[-1] // self.heads
+
+        q_in, k, v = qkv
+        # all above are (b, l, h, w, c)
      
-        q = q_in.view(b, l, new_h, self.window_size, new_w, self.window_size, self.heads, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        q = q.view(b, l, self.heads, new_h * new_w, self.window_size * self.window_size, c_head)
+        # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
+        q_in = q_in.unflatten(2, (-1, self.window_size)).unflatten(4, (-1, self.window_size))
+        # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
+        q = q_in.unflatten(6, (self.heads, -1))
+        # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
+        q = q.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
+        q = q.flatten(3, 4).flatten(4, 5)
 
-        k = k_in.view(b, l, new_h, self.window_size, new_w, self.window_size, self.heads, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        k = k.view(b, l, self.heads, new_h * new_w, self.window_size * self.window_size, c_head)
+        # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
+        k = k.unflatten(2, (-1, self.window_size)).unflatten(4, (-1, self.window_size))
+        # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
+        k = k.unflatten(6, (self.heads, -1))
+        # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
+        k = k.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
+        k = k.flatten(3, 4).flatten(4, 5)
+                
+        # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
+        v = v.unflatten(2, (-1, self.window_size)).unflatten(4, (-1, self.window_size))
+        # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
+        v = v.unflatten(6, (self.heads, -1))
+        # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
+        v = v.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
+        v = v.flatten(3, 4).flatten(4, 5)
 
-        v = v_in.view(b, l, new_h, self.window_size, new_w, self.window_size, self.heads, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        v = v.view(b, l, self.heads, new_h * new_w, self.window_size * self.window_size, c_head)
-
-        # 3. Attention Calculation
-        # TensorRT likes matmul better than einsum for these specific dims
-        # q: (..., i, c), k: (..., j, c) -> k.transpose: (..., c, j)
+        # (b, l, heads, new_h*new_w, w_size*w_size, w_size*w_size)
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
 
-        # 4. Positional Embedding
+        # Positional Embedding
         if self.relative_pos_embedding:
-            # Note: Ensure relative_indices was cast to int32 in __init__
-            dots += self.pos_embedding[self.relative_indices[:, :, 0],
-                                    self.relative_indices[:, :, 1]]
+            flat_table = self.pos_embedding.view(-1)
+            pos_enc = torch.index_select(flat_table, 0, self.rel_idx_1d)
+            L_sq = self.window_size ** 2
+            dots += pos_enc.view(L_sq, L_sq)
         else:
             dots += self.pos_embedding
 
+        # (b, l, heads, new_h*new_w, w_size*w_size, w_size*w_size)
         attn = dots.softmax(dim=-1)
 
-        # 5. Combine Value
-        # attn: (..., i, j), v: (..., j, c) -> out: (..., i, c)
+        # (b, l, heads, new_h*new_w, w_size*w_size, c_head)
         out = torch.matmul(attn, v)
 
-        # 6. Window Reversal (TRT-safe rearrange alternative)
-        # b l m (new_h new_w) (self.window_size self.window_size) c -> b l (new_h self.window_size) (new_w self.window_size) (m c)
-        
-        # Step A: Split back into individual dims
-        out = out.view(b, l, self.heads, new_h, new_w, self.window_size, self.window_size, c_head)
-        # Step B: Permute to original spatial order
-        # Current: 0:b, 1:l, 2:m, 3:new_h, 4:new_w, 5:self.window_size, 6:self.window_size, 7:c_head
-        # Target: b(0), l(1), new_h(3), self.window_size(5), new_w(4), self.window_size(6), m(2), c_head(7)
+        # (b, l, heads, new_h*new_w, w_size*w_size, c_head) -> (b, l, heads, new_h, new_w, w_size, w_size, c_head)
+        out = out.unflatten(3, (q_in.shape[2], -1)).unflatten(5, (self.window_size, self.window_size))
+        # (b, l, heads, new_h, new_w, w_size, w_size, c_head) -> (b, l, new_h, w_size, new_w, w_size, heads, c_head)
         out = out.permute(0, 1, 3, 5, 4, 6, 2, 7).contiguous()
-        # Step C: Collapse into final shape
-        out = out.view(b, l, h, w, self.heads * c_head)
+        # (b, l, new_h, w_size, new_w, w_size, heads, c_head) -> (b, l, new_h*w_size, new_w*w_size, heads*c_head)
+        out = out.flatten(2, 3).flatten(3, 4).flatten(4, 5)
 
         # 7. Final Projection
         out = self.to_out(out)

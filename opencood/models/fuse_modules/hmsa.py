@@ -57,7 +57,7 @@ class HGTCavAttention(nn.Module):
     def apply_type_linear(self, x, types, weight, bias):
         """Vectorized linear projection based on types (B, L)"""
         # Flatten and gather weights for each token: (B*L, out_dim, in_dim)
-        flat_types = types.view(-1)
+        flat_types = types.view(-1).to(torch.int32)
         w = weight[flat_types] 
         b = bias[flat_types].unsqueeze(-1)
         
@@ -87,10 +87,11 @@ class HGTCavAttention(nn.Module):
     def get_hetero_edge_weights(self, types):
         t1 = types.unsqueeze(2) 
         t2 = types.unsqueeze(1)
-        relation_idx = (t1 * self.num_types + t2).view(-1)
+        relation_idx = (t1 * torch.tensor(self.num_types, dtype=torch.int32, device='cuda') + t2).view(-1)
         
-        w_att = self.relation_att[relation_idx].view(types.shape[0], types.shape[1], types.shape[1], self.heads, -1, self.relation_att.shape[-1])
-        w_msg = self.relation_msg[relation_idx].view(types.shape[0], types.shape[1], types.shape[1], self.heads, -1, self.relation_msg.shape[-1])
+        w_att = self.relation_att[relation_idx]
+        w_att = w_att.view(types.shape[0], types.shape[1], types.shape[1], self.heads, -1, self.relation_att.shape[-1])
+        w_msg = self.relation_msg[relation_idx].view(w_att.shape)
         
         w_att = w_att.permute(0, 3, 1, 2, 4, 5).contiguous()
         w_msg = w_msg.permute(0, 3, 1, 2, 4, 5).contiguous()

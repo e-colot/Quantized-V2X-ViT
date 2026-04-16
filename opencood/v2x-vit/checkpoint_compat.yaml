@@ -1,4 +1,4 @@
-version: 6
+version: 7
 
 # Use exact mappings when one old key should become exactly one new key.
 rename_exact: []
@@ -89,7 +89,7 @@ ignore_missing_keys_regex:
   # BaseWindowAttention runtime buffers for TensorRT-friendly graph state.
   - '\.heads$'
   - '\.window_size$'
-  - '\.relative_indices$'
+  - '\.rel_idx_1d$'
   - '\.scale$'
   # STTF runtime buffers added for TensorRT-friendly graph state.
   - '\.discrete_ratio$'
