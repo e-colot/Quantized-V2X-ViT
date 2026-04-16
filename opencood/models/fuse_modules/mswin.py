@@ -34,7 +34,7 @@ class BaseWindowAttention(nn.Module):
             indices_1d = rel_coords[:, :, 0] * stride + rel_coords[:, :, 1]
             
             # Register the INDEX MAP as a buffer (TensorRT constant)
-            self.register_buffer('rel_idx_1d', indices_1d.flatten().long())
+            self.register_buffer('rel_idx_1d', indices_1d.flatten().to(torch.int32))
             
             # This matches your trained checkpoint shape
             self.pos_embedding = nn.Parameter(torch.randn(stride, stride))

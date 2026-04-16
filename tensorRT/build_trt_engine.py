@@ -14,6 +14,7 @@ class Arguments:
         self.model_dir = 'opencood/v2x-vit'
         self.fusion_method = 'intermediate'
         self.engine_path = 'tensorRT/v2xvit_fp32.engine'
+        self.graph_log_path = 'tensorRT/build_trt_engine.graphs.log'
         self.precision = 'fp32'  # 'fp16' or 'fp32'
         self.device = 'cuda:0'
 
@@ -197,6 +198,18 @@ def _try_script_module(module, module_name: str) -> Optional[torch.jit.ScriptMod
         return None
 
 
+def _write_graph_dump(graph_log_path: str, traced_module: torch.jit.ScriptModule):
+    os.makedirs(os.path.dirname(graph_log_path), exist_ok=True)
+    with open(graph_log_path, 'w', encoding='utf-8') as f:
+        f.write('--- traced.graph ---\n')
+        f.write(str(traced_module.graph))
+        f.write('\n\n')
+        f.write('--- traced.inlined_graph ---\n')
+        f.write(str(traced_module.inlined_graph))
+        f.write('\n')
+    print(f'TorchScript graph dump written to: {graph_log_path}')
+
+
 def _prepare_torchscript_module(adapter, opt, hypes):
     # Try Scripting first if enabled
     if opt.try_script_first:
@@ -226,8 +239,7 @@ def _prepare_torchscript_module(adapter, opt, hypes):
         )
         print("Successfully traced the adapter.")
 
-        print("DEBUG: TorchScript Graph (Inlined):")
-        print(traced_adapter.graph)
+        _write_graph_dump(opt.graph_log_path, traced_adapter)
 
         # Search specifically for the 'item' node in the graph string
         graph_str = str(traced_adapter.graph)
@@ -277,6 +289,7 @@ def main():
         inputs=trt_inputs,
         enabled_precisions=enabled_precisions,
         truncate_long_and_double=True,
+        allow_shape_tensors=True,
     )
 
     os.makedirs(os.path.dirname(opt.engine_path), exist_ok=True)

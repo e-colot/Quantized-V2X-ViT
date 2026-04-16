@@ -106,9 +106,11 @@ class HGTCavAttention(nn.Module):
         types = prior_encoding[:, :, 0, 0, 2].to(torch.int32)
 
         q_in, k_in, v_in = self.to_qkv(x, types)
+        # all the above are (B, H, W, L, out_C)
+
         w_att, w_msg = self.get_hetero_edge_weights( types)
 
-        # Reshape for multi-head attention
+        # (B, H, W, L, out_C) -> (B, H, W, L, heads, D)
         q = q_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
         k = k_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
         v = v_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()

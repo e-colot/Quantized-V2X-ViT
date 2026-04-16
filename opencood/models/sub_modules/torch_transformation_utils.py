@@ -285,11 +285,11 @@ def get_rotation_matrix2d(M: torch.Tensor, dsize: torch.Tensor):
 
     cx = W / two
     cy = H / two
-    
-    ones = torch.ones(B, device=device, dtype=dtype)
-    zeros = torch.zeros(B, device=device, dtype=dtype)
     cx_b = cx.expand(B)
     cy_b = cy.expand(B)
+
+    ones = torch.ones_like(cx_b)
+    zeros = torch.zeros_like(cx_b)
 
     r0 = torch.stack([ones, zeros, cx_b], dim=1)
     r1 = torch.stack([zeros, ones, cy_b], dim=1)
@@ -331,7 +331,7 @@ def get_transformation_matrix(M, spatial_size: torch.Tensor):
             Transformation matrix with shape :math:`(N, 2, 3)`.
     """
     T = get_rotation_matrix2d(M, spatial_size)
-    T[..., 2] += M[..., 2]
+    T[..., 2] = T[..., 2] + M[..., 2]
     return T
 
 
@@ -404,8 +404,8 @@ def _gather_from_hw(src: torch.Tensor, x_idx: torch.Tensor, y_idx: torch.Tensor)
     
     # Create 1D indices
     # We use .view() to place them in the correct dimensions for broadcasting
-    i = torch.arange(src.shape[0], device=device).view(src.shape[0], 1, 1) # (B, 1, 1)
-    j = torch.arange(src.shape[1], device=device).view(1, src.shape[1], 1)    # (1, L, 1)
+    i = torch.arange(src.shape[0], device=device, dtype=torch.int32).view(src.shape[0], 1, 1) # (B, 1, 1)
+    j = torch.arange(src.shape[1], device=device, dtype=torch.int32).view(1, src.shape[1], 1)    # (1, L, 1)
 
     # linear_idx is likely (B, L, K)
     # When we index with i and j, PyTorch broadcasts them to match linear_idx

@@ -29,7 +29,7 @@ def regroup(dense_feature: torch.Tensor, record_len: torch.Tensor, max_len: int)
     dtype = dense_feature.dtype
 
     # binary mask (B, L)
-    lp_indices = torch.arange(L, device=device).view(1, L).expand(B, L)
+    lp_indices = torch.arange(L, device=device, dtype=torch.int32).view(1, L).expand(B, L)
     mask = lp_indices < record_len.unsqueeze(1) # [B, L]
 
     # flatten dense features to [N, V] where V = C*H*W

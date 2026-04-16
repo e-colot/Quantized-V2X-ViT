@@ -26,7 +26,7 @@ class STTF(nn.Module):
 
         # x shape: (B, L, H, W, C) -> (B, L, C, H, W)
         x = x.permute(0, 1, 4, 2, 3)
-        spatial_size = torch.tensor([orig_shape[2], orig_shape[3]], device=device)
+        spatial_size = torch.tensor([orig_shape[2], orig_shape[3]], device=device, dtype=torch.int32)
 
         dist_correction_matrix = get_discretized_transformation_matrix(
             spatial_correction_matrix, 
