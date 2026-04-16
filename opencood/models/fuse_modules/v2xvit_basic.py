@@ -71,16 +71,15 @@ class RelTemporalEncoding(nn.Module):
     def __init__(self, n_hid, RTE_ratio, max_len=100):
         super(RelTemporalEncoding, self).__init__()
         # Use a buffer so it's moved to GPU automatically
-        self.register_buffer('div_term', torch.exp(torch.arange(0, n_hid, 2) *
-                             -(math.log(10000.0) / n_hid)))
+        div_term = torch.exp(torch.arange(0, n_hid, 2) * -(math.log(10000.0) / n_hid))
         
         # Use an actual Embedding layer or a functional approach
         self.emb = nn.Embedding(max_len, n_hid)
         
         # Precompute sinusoid weights
         position = torch.arange(0., max_len).unsqueeze(1)
-        self.emb.weight.data[:, 0::2] = torch.sin(position * self.div_term) / math.sqrt(n_hid)
-        self.emb.weight.data[:, 1::2] = torch.cos(position * self.div_term) / math.sqrt(n_hid)
+        self.emb.weight.data[:, 0::2] = torch.sin(position * div_term) / math.sqrt(n_hid)
+        self.emb.weight.data[:, 1::2] = torch.cos(position * div_term) / math.sqrt(n_hid)
         self.emb.weight.requires_grad = False
         
         self.register_buffer('RTE_ratio', torch.tensor(RTE_ratio, dtype=torch.int32))

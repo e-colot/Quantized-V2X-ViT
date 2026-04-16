@@ -90,11 +90,11 @@ def _extract_model_inputs_from_batch(batch_data):
     ego = batch_data['ego']
     processed = ego['processed_lidar']
     return (
-        processed['voxel_features'],
-        processed['voxel_coords'],
-        processed['voxel_num_points'],
+        processed['voxel_features'].to(torch.float32),
+        processed['voxel_coords'].to(torch.int32),
+        processed['voxel_num_points'].to(torch.int32),
         ego['record_len'].to(torch.int32),
-        ego['prior_encoding'],
+        ego['prior_encoding'].to(torch.float32),
         ego['spatial_correction_matrix'].to(torch.float32),
     )
 

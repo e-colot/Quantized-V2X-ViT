@@ -392,28 +392,23 @@ def _gather_from_hw(src: torch.Tensor, x_idx: torch.Tensor, y_idx: torch.Tensor)
         out: torch.Tensor
             slice of src
     """
-    B, C, H, W = src.shape
-    H_out, W_out = x_idx.shape[1], x_idx.shape[2]
-    linear_idx = (y_idx * W + x_idx).view(B, 1, -1).expand(-1, C, -1)
-    src_flat = src.reshape(B, C, H * W)
+    # src shape: (B, C, H, W)
+    linear_idx = (y_idx * src.shape[3] + x_idx).view(src.shape[0], 1, -1).expand(-1, src.shape[1], -1)
 
-    # tensorRT struggles with:
-    # out = torch.gather(src_flat, 2, linear_idx)
-    # -> split it in different steps
-
-    batch_size, seq_len, _ = src_flat.shape
+    # (B, C, H, W) -> (B, C, H*W)
+    src_flat = src.flatten(2)
     device = 'cuda'
     
     # Create 1D indices
     # We use .view() to place them in the correct dimensions for broadcasting
-    i = torch.arange(batch_size, device=device).view(batch_size, 1, 1) # (B, 1, 1)
-    j = torch.arange(seq_len, device=device).view(1, seq_len, 1)    # (1, L, 1)
+    i = torch.arange(src.shape[0], device=device).view(src.shape[0], 1, 1) # (B, 1, 1)
+    j = torch.arange(src.shape[1], device=device).view(1, src.shape[1], 1)    # (1, L, 1)
 
     # linear_idx is likely (B, L, K)
     # When we index with i and j, PyTorch broadcasts them to match linear_idx
     out = src_flat[i, j, linear_idx]
 
-    return out.view(B, C, H_out, W_out)
+    return out.reshape(src.shape)
 
 
 def _affine_grid_sample_approx_prepare_norm_grid(theta: torch.Tensor, dsize: torch.Tensor, align_corners: bool = True):

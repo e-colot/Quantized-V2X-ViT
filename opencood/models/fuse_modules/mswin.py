@@ -21,16 +21,17 @@ class BaseWindowAttention(nn.Module):
         super().__init__()
         inner_dim = dim_head * heads
 
-        self.heads = heads
-        self.scale = dim_head ** -0.5
-        self.window_size = window_size
+        self.register_buffer('heads', torch.tensor(heads, dtype=torch.int32, device='cuda'))
+        self.register_buffer('scale', torch.tensor(dim_head ** -0.5, dtype=torch.float32, device='cuda'))
+        self.register_buffer('window_size', torch.tensor(window_size, dtype=torch.int32, device='cuda'))
         self.relative_pos_embedding = relative_pos_embedding
+        self.register_buffer('relative_indices', torch.empty((0, 0, 2), dtype=torch.int32, device='cuda'))
 
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
 
         if self.relative_pos_embedding:
-            self.relative_indices = get_relative_distances(window_size) + \
-                                    window_size - 1
+            self.relative_indices = (get_relative_distances(window_size) +
+                                     window_size - 1).to(dtype=torch.int32, device='cuda')
             self.pos_embedding = nn.Parameter(torch.randn(2 * window_size - 1,
                                                           2 * window_size - 1))
         else:
@@ -44,26 +45,22 @@ class BaseWindowAttention(nn.Module):
 
     def forward(self, x):
         # x shape: (b, l, h, w, c)
-        b, l, h, w, c = x.shape
-        m = self.heads
-        wh = self.window_size
-        ww = self.window_size
-        new_h = h // wh
-        new_w = w // ww
+        b, l, h, w = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
+        new_h = h // self.window_size
+        new_w = w // self.window_size
 
-        # 1. Project and Chunk (Avoids map/lambda)
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q_in, k_in, v_in = qkv
-        c_head = q_in.shape[-1] // m
+        c_head = q_in.shape[-1] // self.heads
      
-        q = q_in.view(b, l, new_h, wh, new_w, ww, m, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        q = q.view(b, l, m, new_h * new_w, wh * ww, c_head)
+        q = q_in.view(b, l, new_h, self.window_size, new_w, self.window_size, self.heads, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        q = q.view(b, l, self.heads, new_h * new_w, self.window_size * self.window_size, c_head)
 
-        k = k_in.view(b, l, new_h, wh, new_w, ww, m, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        k = k.view(b, l, m, new_h * new_w, wh * ww, c_head)
+        k = k_in.view(b, l, new_h, self.window_size, new_w, self.window_size, self.heads, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        k = k.view(b, l, self.heads, new_h * new_w, self.window_size * self.window_size, c_head)
 
-        v = v_in.view(b, l, new_h, wh, new_w, ww, m, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        v = v.view(b, l, m, new_h * new_w, wh * ww, c_head)
+        v = v_in.view(b, l, new_h, self.window_size, new_w, self.window_size, self.heads, c_head).permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
+        v = v.view(b, l, self.heads, new_h * new_w, self.window_size * self.window_size, c_head)
 
         # 3. Attention Calculation
         # TensorRT likes matmul better than einsum for these specific dims
@@ -85,16 +82,16 @@ class BaseWindowAttention(nn.Module):
         out = torch.matmul(attn, v)
 
         # 6. Window Reversal (TRT-safe rearrange alternative)
-        # b l m (new_h new_w) (wh ww) c -> b l (new_h wh) (new_w ww) (m c)
+        # b l m (new_h new_w) (self.window_size self.window_size) c -> b l (new_h self.window_size) (new_w self.window_size) (m c)
         
         # Step A: Split back into individual dims
-        out = out.view(b, l, m, new_h, new_w, wh, ww, c_head)
+        out = out.view(b, l, self.heads, new_h, new_w, self.window_size, self.window_size, c_head)
         # Step B: Permute to original spatial order
-        # Current: 0:b, 1:l, 2:m, 3:new_h, 4:new_w, 5:wh, 6:ww, 7:c_head
-        # Target: b(0), l(1), new_h(3), wh(5), new_w(4), ww(6), m(2), c_head(7)
+        # Current: 0:b, 1:l, 2:m, 3:new_h, 4:new_w, 5:self.window_size, 6:self.window_size, 7:c_head
+        # Target: b(0), l(1), new_h(3), self.window_size(5), new_w(4), self.window_size(6), m(2), c_head(7)
         out = out.permute(0, 1, 3, 5, 4, 6, 2, 7).contiguous()
         # Step C: Collapse into final shape
-        out = out.view(b, l, h, w, m * c_head)
+        out = out.view(b, l, h, w, self.heads * c_head)
 
         # 7. Final Projection
         out = self.to_out(out)

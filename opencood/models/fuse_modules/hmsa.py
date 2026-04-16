@@ -56,7 +56,6 @@ class HGTCavAttention(nn.Module):
 
     def apply_type_linear(self, x, types, weight, bias):
         """Vectorized linear projection based on types (B, L)"""
-        B, H, W, L, C = x.shape
         # Flatten and gather weights for each token: (B*L, out_dim, in_dim)
         flat_types = types.view(-1)
         w = weight[flat_types] 
@@ -64,14 +63,17 @@ class HGTCavAttention(nn.Module):
         
         # Reshape x for batch matrix multiplication: (B*L, in_dim, 1)
         # Note: We treat (H, W) as part of the batch for projection
-        x_flat = x.permute(0, 3, 1, 2, 4).reshape(B * L, H * W, C)
+        # (B, H, W, L, C) -> (B, L, H, W, C) -> (B*L, H*W, C)
+        x_flat = x.permute(0, 3, 1, 2, 4).flatten(0, 1).flatten(1, 2)
         
         # out = x @ W.T + b
-        # (B*L, HW, C) @ (B*L, C, out_C) -> (B*L, HW, out_C)
+        # (B*L, H*W, C) @ (B*L, C, out_C) -> (B*L, H*W, out_C)
         out = torch.bmm(x_flat, w.transpose(-1, -2)) + b.transpose(-1, -2)
-        
-        # Reshape back to (B, H, W, L, out_C)
-        return out.view(B, L, H, W, -1).permute(0, 2, 3, 1, 4).contiguous()
+
+        # (B*L, H*W, out_C) -> (B, L, H*W, out_C) -> (B, L, H, W, out_C)
+        out = out.unflatten(0, (x.shape[0], -1)).unflatten(2, (x.shape[1], -1))
+        # (B, L, H, W, out_C) -> (B, H, W, L, out_C)
+        return out.permute(0, 2, 3, 1, 4).contiguous()
 
     def to_qkv(self, x, types):
         q = self.apply_type_linear(x, types, self.q_weight, self.q_bias)
@@ -82,36 +84,33 @@ class HGTCavAttention(nn.Module):
     def to_out(self, x, types):
         return self.apply_type_linear(x, types, self.a_weight, self.a_bias)
 
-    def get_hetero_edge_weights(self, x, types):
-        B, L = types.shape
+    def get_hetero_edge_weights(self, types):
         t1 = types.unsqueeze(2) 
         t2 = types.unsqueeze(1)
         relation_idx = (t1 * self.num_types + t2).view(-1)
         
-        w_att = self.relation_att[relation_idx].view(B, L, L, self.heads, -1, self.relation_att.shape[-1])
-        w_msg = self.relation_msg[relation_idx].view(B, L, L, self.heads, -1, self.relation_msg.shape[-1])
+        w_att = self.relation_att[relation_idx].view(types.shape[0], types.shape[1], types.shape[1], self.heads, -1, self.relation_att.shape[-1])
+        w_msg = self.relation_msg[relation_idx].view(types.shape[0], types.shape[1], types.shape[1], self.heads, -1, self.relation_msg.shape[-1])
         
         w_att = w_att.permute(0, 3, 1, 2, 4, 5).contiguous()
         w_msg = w_msg.permute(0, 3, 1, 2, 4, 5).contiguous()
         return w_att, w_msg
 
     def forward(self, x, mask, prior_encoding):
-        B, L, H, W, C = x.shape
-        M, D = self.heads, C // self.heads
+        # x shape: (B, L, H, W, C)
 
         x = x.permute(0, 2, 3, 1, 4).contiguous() # (B, H, W, L, C)
         mask = mask.unsqueeze(1) # (B, 1, H, W, L)
 
-        # TRT Fix: Use simple indexing to avoid .split() or .item()
         types = prior_encoding[:, :, 0, 0, 2].to(torch.int32)
 
         q_in, k_in, v_in = self.to_qkv(x, types)
-        w_att, w_msg = self.get_hetero_edge_weights(x, types)
+        w_att, w_msg = self.get_hetero_edge_weights( types)
 
         # Reshape for multi-head attention
-        q = q_in.view(B, H, W, L, M, D).permute(0, 4, 1, 2, 3, 5).contiguous()
-        k = k_in.view(B, H, W, L, M, D).permute(0, 4, 1, 2, 3, 5).contiguous()
-        v = v_in.view(B, H, W, L, M, D).permute(0, 4, 1, 2, 3, 5).contiguous()
+        q = q_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
+        k = k_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
+        v = v_in.unflatten(-1, (self.heads, -1)).permute(0, 4, 1, 2, 3, 5).contiguous()
 
         # Attention Map (Einsum is TRT-friendly in recent versions)
         q_w = torch.einsum('bmhwip,bmijpq->bmhwijq', q, w_att)
@@ -125,7 +124,7 @@ class HGTCavAttention(nn.Module):
         out = torch.einsum('bmhwij,bmhwijc->bmhwic', att_map, v_msg)
 
         # Output projection
-        out = out.permute(0, 2, 3, 4, 1, 5).contiguous().view(B, H, W, L, C)
+        out = out.permute(0, 2, 3, 4, 1, 5).contiguous().view(x.shape)
         out = self.to_out(out, types)
         out = self.drop_out(out)
         
