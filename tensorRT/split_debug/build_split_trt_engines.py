@@ -164,7 +164,7 @@ class Stage3cFusionBlocks(torch.nn.Module):
             com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
         else:
             com_mask = get_roi_and_cav_mask(
-                x.shape,
+                x,
                 mask,
                 spatial_correction_matrix,
                 encoder.discrete_ratio,
@@ -539,7 +539,7 @@ def main():
             (x_after_rte, spatial_correction_matrix),
             _build_trt_inputs_from_example_tensors(
                 torch_tensorrt,
-                (x_after_rte, mask, spatial_correction_matrix),
+                (x_after_rte, spatial_correction_matrix),
             ),
         ),
         (

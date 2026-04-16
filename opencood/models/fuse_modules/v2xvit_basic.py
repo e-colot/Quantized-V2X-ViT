@@ -15,9 +15,10 @@ from torch import nn
 class STTF(nn.Module):
     def __init__(self, args):
         super(STTF, self).__init__()
+        device = 'cuda'
         # Register these as buffers to keep them as Tensors in the graph
-        self.register_buffer('discrete_ratio', torch.tensor(args['voxel_size'][0]))
-        self.register_buffer('downsample_rate', torch.tensor(float(args['downsample_rate'])))
+        self.register_buffer('discrete_ratio', torch.tensor(args['voxel_size'][0], dtype=torch.float32, device=device))
+        self.register_buffer('downsample_rate', torch.tensor(float(args['downsample_rate']), dtype=torch.float32, device=device))
 
     def forward(self, x, spatial_correction_matrix):
         device = 'cuda'

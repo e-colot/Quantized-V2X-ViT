@@ -16,7 +16,6 @@ from opencood.models.sub_modules.torch_transformation_utils import (
     affine_grid_sample_approx,
     combine_roi_and_cav_mask,
     convert_affinematrix_to_homography,
-    eye_like,
     get_discretized_transformation_matrix,
     get_roi_and_cav_mask,
     get_rotation_matrix2d,
@@ -55,7 +54,7 @@ class FunctionGetDiscretizedTransformationMatrix(torch.nn.Module):
 class FunctionGetTransformationMatrix(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
-        self.dsize = (int(h), int(w))
+        self.register_buffer("dsize", torch.tensor([int(h), int(w)], dtype=torch.int32))
 
     def forward(self, dist_correction_matrix):
         return get_transformation_matrix(dist_correction_matrix.reshape(-1, 2, 3), self.dsize)
@@ -64,10 +63,11 @@ class FunctionGetTransformationMatrix(torch.nn.Module):
 class FunctionGetRotatedROI(torch.nn.Module):
     def __init__(self, b: int, l: int, c: int, h: int, w: int):
         super().__init__()
-        self.shape = (int(b), int(l), int(c), int(h), int(w))
+        self.register_buffer("input_template", torch.ones((int(b), int(l), int(c), int(h), int(w)), dtype=torch.float32))
+        self.register_buffer("spatial_size", torch.tensor([int(h), int(w)], dtype=torch.int32))
 
     def forward(self, correction_matrix):
-        return get_rotated_roi(self.shape, correction_matrix)
+        return get_rotated_roi(self.input_template, self.spatial_size, correction_matrix)
 
 
 class FunctionCombineRoiAndCavMask(torch.nn.Module):
@@ -78,17 +78,16 @@ class FunctionCombineRoiAndCavMask(torch.nn.Module):
 class FunctionGetRoiAndCavMask(torch.nn.Module):
     def __init__(self, h: int, w: int, c: int, discrete_ratio: float, downsample_rate: float):
         super().__init__()
-        self.h = int(h)
-        self.w = int(w)
-        self.c = int(c)
+        self.register_buffer("input_template", torch.ones((1, 1, int(h), int(w), int(c)), dtype=torch.float32))
         self.discrete_ratio = float(discrete_ratio)
         self.downsample_rate = float(downsample_rate)
 
     def forward(self, cav_mask, spatial_correction_matrix):
-        b = int(cav_mask.shape[0])
-        l = int(cav_mask.shape[1])
+        b = cav_mask.shape[0]
+        l = cav_mask.shape[1]
+        input_tensor = self.input_template.expand(b, l, -1, -1, -1)
         return get_roi_and_cav_mask(
-            (b, l, self.h, self.w, self.c),
+            input_tensor,
             cav_mask,
             spatial_correction_matrix,
             self.discrete_ratio,
@@ -104,8 +103,8 @@ class FunctionConvertAffineToHomography(torch.nn.Module):
 class FunctionNormalizeHomography(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
-        self.src_size = (int(h), int(w))
-        self.dst_size = (int(h), int(w))
+        self.register_buffer("src_size", torch.tensor([int(h), int(w)], dtype=torch.int32))
+        self.register_buffer("dst_size", torch.tensor([int(h), int(w)], dtype=torch.int32))
 
     def forward(self, homography_3x3):
         return normalize_homography(homography_3x3, self.src_size, self.dst_size)
@@ -114,7 +113,7 @@ class FunctionNormalizeHomography(torch.nn.Module):
 class FunctionAffineGridSampleApprox(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
-        self.dsize = (int(h), int(w))
+        self.register_buffer("dsize", torch.tensor([int(h), int(w)], dtype=torch.int32))
 
     def forward(self, src, theta):
         return affine_grid_sample_approx(
@@ -130,7 +129,7 @@ class FunctionAffineGridSampleApprox(torch.nn.Module):
 class FunctionAffineGridPrepareNormGrid(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
-        self.dsize = (int(h), int(w))
+        self.register_buffer("dsize", torch.tensor([int(h), int(w)], dtype=torch.int32))
 
     def forward(self, theta):
         return _affine_grid_sample_approx_prepare_norm_grid(
@@ -159,7 +158,7 @@ class FunctionGatherFromHw(torch.nn.Module):
 class FunctionWarpAffine(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
-        self.dsize = (int(h), int(w))
+        self.register_buffer("dsize", torch.tensor([int(h), int(w)], dtype=torch.int32))
 
     def forward(self, src, affine_2x3):
         return warp_affine(
@@ -172,15 +171,6 @@ class FunctionWarpAffine(torch.nn.Module):
         )
 
 
-class FunctionEyeLikeFromAffine(torch.nn.Module):
-    def __init__(self, n: int):
-        super().__init__()
-        self.n = int(n)
-
-    def forward(self, affine_2x3):
-        return eye_like(self.n, affine_2x3, device=affine_2x3.device, dtype=affine_2x3.dtype)
-
-
 class FunctionNormalTransformPixelFromAffine(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
@@ -188,9 +178,11 @@ class FunctionNormalTransformPixelFromAffine(torch.nn.Module):
         self.w = int(w)
 
     def forward(self, affine_2x3):
+        h_tensor = torch.tensor(float(self.h), device=affine_2x3.device, dtype=affine_2x3.dtype)
+        w_tensor = torch.tensor(float(self.w), device=affine_2x3.device, dtype=affine_2x3.dtype)
         return normal_transform_pixel(
-            self.h,
-            self.w,
+            h_tensor,
+            w_tensor,
             device=affine_2x3.device,
             dtype=affine_2x3.dtype,
         )
@@ -204,7 +196,7 @@ class Function3x3CramerInverse(torch.nn.Module):
 class FunctionGetRotationMatrix2D(torch.nn.Module):
     def __init__(self, h: int, w: int):
         super().__init__()
-        self.dsize = (int(h), int(w))
+        self.register_buffer("dsize", torch.tensor([int(h), int(w)], dtype=torch.int32))
 
     def forward(self, affine_2x3):
         return get_rotation_matrix2d(affine_2x3, self.dsize)
@@ -347,8 +339,6 @@ def main():
     selected_function = os.environ.get("TRT_FUNCTION", "all")
     valid_function_names = {
         "all",
-        "eye_like",
-        "normal_transform_pixel",
         "cramer_inverse_3x3",
         "rotation_matrix2d",
         "discretized_transform",
@@ -405,9 +395,6 @@ def main():
         ).to("cuda").eval()
         dist_matrix = function_discretized_transform(spatial_correction_matrix)
         affine_2x3 = dist_matrix.reshape(-1, 2, 3)
-
-        function_eye_like = FunctionEyeLikeFromAffine(3).to("cuda").eval()
-        _ = function_eye_like(affine_2x3)
 
         function_normal_transform_pixel = FunctionNormalTransformPixelFromAffine(h, w).to("cuda").eval()
         normal_transform = function_normal_transform_pixel(affine_2x3)
@@ -466,19 +453,6 @@ def main():
     enabled_precisions = {torch.float16} if opt.precision == "fp16" else {torch.float32}
 
     functions = [
-        (
-            "eye_like",
-            function_eye_like,
-            (affine_2x3,),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (affine_2x3,)),
-        ),
-        # no computations -> not converted to tensorRT
-        # (
-        #     "normal_transform_pixel",
-        #     function_normal_transform_pixel,
-        #     (affine_2x3,),
-        #     _build_trt_inputs_from_example_tensors(torch_tensorrt, (affine_2x3,)),
-        # ),
         (
             "cramer_inverse_3x3",
             function_cramer_inverse_3x3,
