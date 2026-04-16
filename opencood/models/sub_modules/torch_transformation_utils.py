@@ -1,23 +1,20 @@
 """
 torch_transformation_utils.py
 """
-import os
-from typing import Tuple, List
+from typing import Tuple
 
 import torch
-import torch.nn.functional as F
-import numpy as np
-import matplotlib.pyplot as plt
 
-def get_roi_and_cav_mask(shape: Tuple[int, int, int, int, int], cav_mask: torch.Tensor, 
+def get_roi_and_cav_mask(input: torch.Tensor, cav_mask: torch.Tensor, 
                          spatial_correction_matrix: torch.Tensor,
                          discrete_ratio: float, downsample_rate: float):
     """
     Get mask for the combination of cav_mask and rorated ROI mask.
     Parameters
     ----------
-    shape : tuple
-        Shape of (B, L, H, W, C).
+    input : torch.Tensor
+        input of shape (B, L, H, W, C).
+        only its shape is used
     cav_mask : torch.Tensor
         Shape of (B, L).
     spatial_correction_matrix : torch.Tensor
@@ -33,13 +30,8 @@ def get_roi_and_cav_mask(shape: Tuple[int, int, int, int, int], cav_mask: torch.
         Combined mask with shape (B, H, W, L, 1).
 
     """
-    B = shape[0]
-    L = shape[1]
-    H = shape[2]
-    W = shape[3]
-    C = 1
 
-    spatial_size = torch.tensor([shape[2], shape[3]], device='cuda', dtype=torch.int32)
+    spatial_size = torch.tensor([input.shape[2], input.shape[3]], device='cuda', dtype=torch.int32)
 
     # (B,L,4,4)
     dist_correction_matrix = get_discretized_transformation_matrix(
@@ -48,8 +40,12 @@ def get_roi_and_cav_mask(shape: Tuple[int, int, int, int, int], cav_mask: torch.
     # (B*L,2,3)
     T = get_transformation_matrix(
         dist_correction_matrix.reshape(-1, 2, 3), spatial_size)
+    
     # (B,L,1,H,W)
-    roi_mask = get_rotated_roi((B, L, C, H, W), T)
+    input_slice = input[..., 0:1]
+    input_reordered = input_slice.permute(0, 1, 4, 2, 3)
+
+    roi_mask = get_rotated_roi(input_reordered, spatial_size, T)
     # (B,L,1,H,W)
     com_mask = combine_roi_and_cav_mask(roi_mask, cav_mask)
     # (B,H,W,1,L)
@@ -82,14 +78,17 @@ def combine_roi_and_cav_mask(roi_mask, cav_mask):
     return com_mask
 
 
-def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: torch.Tensor) -> torch.Tensor:
+def get_rotated_roi(input: torch.Tensor, spatial_size: torch.Tensor, correction_matrix: torch.Tensor) -> torch.Tensor:
     """
     Get rotated ROI mask.
 
     Parameters
     ----------
-    shape : tuple
-        Shape of (B,L,C,H,W).
+    input : torch.Tensor
+        input of shape (B,L,C,H,W).
+        only its shape is used
+    spatial_size: torch.Tensor
+        (H, W), same as from input
     correction_matrix : torch.Tensor
         Correction matrix with shape (N,2,3).
 
@@ -98,23 +97,19 @@ def get_rotated_roi(shape: Tuple[int, int, int, int, int], correction_matrix: to
     roi_mask : torch.Tensor
         Rotated ROI mask with shape (N,2,3).
     """
-    B, L, C, H, W = shape
-
-    spatial_size = torch.tensor([H, W], device='cuda', dtype=torch.int32)
 
     # To reduce the computation, we only need to calculate the
     # mask for the first channel.
     # (B,L,1,H,W)
-    x = torch.ones((B, L, 1, H, W), dtype=correction_matrix.dtype, device='cuda')
+    x = torch.ones_like(input)
     # (B*L,1,H,W)
-    roi_mask = warp_affine(x.reshape(-1, 1, H, W), correction_matrix,
+    roi_mask = warp_affine(x.reshape(-1, 1, input.shape[3], input.shape[4]), correction_matrix,
                            dsize=spatial_size, mode="bilinear") # was mode='nearest'
     # going from 'nearest' to 'bilinear' lost 0.02% AP @ IOU 0.7 (0% elesewhere)
     # -> acceptable loss
 
     # (B,L,C,H,W)
-    roi_mask = torch.repeat_interleave(roi_mask, C, dim=1).reshape(B, L, C, H,
-                                                                   W)
+    roi_mask = torch.repeat_interleave(roi_mask, 1, dim=1).reshape(input.shape)
     return roi_mask
 
 

@@ -189,7 +189,7 @@ class V2XTEncoder(nn.Module):
             x = self.rte(x, dt)
         x = self.sttf(x, spatial_correction_matrix)
         com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(
-            3) if not self.use_roi_mask else get_roi_and_cav_mask(x.shape,
+            3) if not self.use_roi_mask else get_roi_and_cav_mask(x,
                                                                   mask,
                                                                   spatial_correction_matrix,
                                                                   self.discrete_ratio,
