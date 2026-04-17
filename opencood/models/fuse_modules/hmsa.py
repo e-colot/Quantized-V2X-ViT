@@ -61,10 +61,11 @@ class HGTCavAttention(nn.Module):
         w = weight[flat_types] 
         b = bias[flat_types].unsqueeze(-1)
         
-        # Reshape x for batch matrix multiplication: (B*L, in_dim, 1)
-        # Note: We treat (H, W) as part of the batch for projection
+        # Reshape x for batch matrix multiplication
         # (B, H, W, L, C) -> (B, L, H, W, C) -> (B*L, H*W, C)
-        x_flat = x.permute(0, 3, 1, 2, 4).flatten(0, 1).flatten(1, 2)
+        x_flat = x.permute(0, 3, 1, 2, 4).reshape(x.shape[0] * x.shape[3],
+                              x.shape[1] * x.shape[2],
+                              x.shape[4])
         
         # out = x @ W.T + b
         # (B*L, H*W, C) @ (B*L, C, out_C) -> (B*L, H*W, out_C)

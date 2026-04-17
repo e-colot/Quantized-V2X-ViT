@@ -1,6 +1,7 @@
 import importlib
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
@@ -178,7 +179,66 @@ class Stage3cFusionBlocks(torch.nn.Module):
         return x
 
 
-class Stage3dFusionPost(torch.nn.Module):
+class Stage3cHGTCavAttentionDebug(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x, prior_encoding, mask, spatial_correction_matrix):
+        encoder = self.model.fusion_net.encoder
+        if not encoder.use_roi_mask:
+            com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+        else:
+            com_mask = get_roi_and_cav_mask(
+                x,
+                mask,
+                spatial_correction_matrix,
+                encoder.discrete_ratio,
+                encoder.downsample_rate,
+            )
+
+        # Debug-only stage: isolate the first CAV attention wrapper
+        hgt_att = encoder.layers[0][0].layers[0][0]
+        return hgt_att(x, mask=com_mask, prior_encoding=prior_encoding)
+
+
+class Stage3dPyramidWindowAttentionDebug(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x):
+        # Debug-only stage: isolate the first pyramid window attention wrapper
+        pwin_att = self.model.fusion_net.encoder.layers[0][0].layers[0][1]
+        return pwin_att(x)
+
+
+class Stage3eFusionBlocks(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x, prior_encoding, mask, spatial_correction_matrix):
+        encoder = self.model.fusion_net.encoder
+        if not encoder.use_roi_mask:
+            com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+        else:
+            com_mask = get_roi_and_cav_mask(
+                x,
+                mask,
+                spatial_correction_matrix,
+                encoder.discrete_ratio,
+                encoder.downsample_rate,
+            )
+
+        for layer in encoder.layers:
+            # Isolate V2XFusionBlocks (layer[0]) only.
+            x = layer[0](x, mask=com_mask, prior_encoding=prior_encoding)
+
+        return x
+
+
+class Stage3fFusionPost(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
@@ -192,7 +252,7 @@ class Stage3dFusionPost(torch.nn.Module):
         return fused_feature
 
 
-class StageHeads(torch.nn.Module):
+class Stage5Heads(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
@@ -209,7 +269,7 @@ def _extract_model_inputs_from_batch(batch_data):
     return (
         processed["voxel_features"].to(torch.float32),
         processed["voxel_coords"].to(torch.int32),
-        processed["voxel_num_points"].to(torch.int32),
+        processed["voxel_num_points"].to(torch.float32),
         ego["record_len"].to(torch.int32),
         ego["prior_encoding"].to(torch.float32),
         ego["spatial_correction_matrix"].to(torch.float32),
@@ -291,15 +351,43 @@ def _write_graph_dump(log_dir: str, stage_name: str, traced_module: torch.jit.Sc
     print(f"[{stage_name}] graph dump written to {graph_path}")
 
 
-def _clean_logs_dir(log_dir: str):
+def _clean_logs_dir(log_dir: str, preserve: Sequence[str] = ()): 
     os.makedirs(log_dir, exist_ok=True)
+    preserve_set = set(preserve)
     for name in os.listdir(log_dir):
+        if name in preserve_set:
+            continue
         path = os.path.join(log_dir, name)
         if os.path.isdir(path):
             shutil.rmtree(path)
         else:
             os.remove(path)
     print("Cleaned previous logs")
+
+
+def _enable_terminal_log(log_dir: str, log_filename: str = "terminal_output.log"):
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, log_filename)
+
+    class _TeeStream:
+        def __init__(self, *streams):
+            self.streams = streams
+
+        def write(self, data):
+            for stream in self.streams:
+                stream.write(data)
+
+        def flush(self):
+            for stream in self.streams:
+                stream.flush()
+
+    log_file = open(log_path, "w", encoding="utf-8")
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = _TeeStream(original_stdout, log_file)
+    sys.stderr = _TeeStream(original_stderr, log_file)
+    print(f"Terminal output log: {log_path}")
+    return original_stdout, original_stderr, log_file
 
 
 def _trace_module(module: torch.nn.Module, name: str, example_inputs: Sequence[torch.Tensor], log_dir: str):
@@ -423,191 +511,207 @@ def main():
         "stage2_regroup",
         "stage3a_rte",
         "stage3b_sttf",
-        "stage3c_fusion_blocks",
-        "stage3d_fusion_post",
-        "stage4_heads",
+        "stage3c_hgt_cav_attention_debug",
+        "stage3d_pyramid_window_attention_debug",
+        "stage3e_fusion_blocks",
+        "stage3f_fusion_post",
+        "stage5_heads",
     }
     if selected_stage not in valid_stage_names:
         raise ValueError(f"Invalid TRT_STAGE={selected_stage}. Use one of {sorted(valid_stage_names)}")
 
     os.makedirs(opt.output_dir, exist_ok=True)
     os.makedirs(opt.log_dir, exist_ok=True)
-    _clean_logs_dir(opt.log_dir)
+    terminal_log_name = "terminal_output.log"
+    original_stdout, original_stderr, log_file = _enable_terminal_log(opt.log_dir, terminal_log_name)
 
-    torch_tensorrt = importlib.import_module("torch_tensorrt")
+    try:
+        _clean_logs_dir(opt.log_dir, preserve=(terminal_log_name,))
+        torch_tensorrt = importlib.import_module("torch_tensorrt")
 
-    print("Loading OpenCOOD config and model...")
-    hypes = yaml_utils.load_yaml(None, opt)
-    model = train_utils.create_model(hypes).to("cuda")
-    _, model = train_utils.load_saved_model(opt.model_dir, model)
-    model.eval()
+        print("Loading OpenCOOD config and model...")
+        hypes = yaml_utils.load_yaml(None, opt)
+        model = train_utils.create_model(hypes).to("cuda")
+        _, model = train_utils.load_saved_model(opt.model_dir, model)
+        model.eval()
 
-    print("Collecting trace input from validation dataset...")
-    dataset, per_sequence_shapes = _collect_validation_shapes(hypes)
-    _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes)
-    trace_idx = _select_trace_dataset_index(per_sequence_shapes, opt)
+        print("Collecting trace input from validation dataset...")
+        dataset, per_sequence_shapes = _collect_validation_shapes(hypes)
+        _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes)
+        trace_idx = _select_trace_dataset_index(per_sequence_shapes, opt)
 
-    sample = dataset[trace_idx]
-    batch_data = dataset.collate_batch_test([sample])
-    batch_data = train_utils.to_device(batch_data, torch.device("cuda"))
-    (
-        voxel_features,
-        voxel_coords,
-        voxel_num_points,
-        record_len,
-        prior_encoding,
-        spatial_correction_matrix,
-    ) = _extract_model_inputs_from_batch(batch_data)
-
-    with torch.no_grad():
-        stage1a_pillar_vfe = Stage1aPillarVFE(model).to("cuda").eval()
-        pillar_features = stage1a_pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
-
-        stage1b_scatter = Stage1bScatter(model).to("cuda").eval()
-        spatial_features = stage1b_scatter(voxel_coords, pillar_features)
-
-        stage1c_backbone = Stage1cBackbone(model).to("cuda").eval()
-        spatial_features_2d_backbone = stage1c_backbone(spatial_features)
-
-        stage1d_neck = Stage1dNeck(model).to("cuda").eval()
-        spatial_features_2d = stage1d_neck(spatial_features_2d_backbone)
-
-        stage_regroup = StageRegroup(opt.max_cavs, record_len).to("cuda").eval()
-        regroup_feature, mask = stage_regroup(spatial_features_2d, prior_encoding)
-
-        stage3a_rte = Stage3aRTE(model).to("cuda").eval()
-        x_after_rte, prior_encoding_stage3 = stage3a_rte(regroup_feature)
-
-        stage3b_sttf = Stage3bSTTF(model).to("cuda").eval()
-        x_after_sttf = stage3b_sttf(x_after_rte, spatial_correction_matrix)
-
-        stage3c_fusion_blocks = Stage3cFusionBlocks(model).to("cuda").eval()
-        x_after_blocks = stage3c_fusion_blocks(x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix)
-
-        stage3d_fusion_post = Stage3dFusionPost(model).to("cuda").eval()
-        fused_feature = stage3d_fusion_post(x_after_blocks)
-
-        stage_heads = StageHeads(model).to("cuda").eval()
-        _ = stage_heads(fused_feature)
-
-    n_opt = int(spatial_features_2d.shape[0])
-    c_spatial = int(spatial_features_2d.shape[1])
-    h_spatial = int(spatial_features_2d.shape[2])
-    w_spatial = int(spatial_features_2d.shape[3])
-
-    n_min = 1
-    n_max = opt.max_cavs
-
-    h_fusion = int(regroup_feature.shape[2])
-    w_fusion = int(regroup_feature.shape[3])
-    c_fusion_in = int(regroup_feature.shape[4])
-
-    c_fused = int(fused_feature.shape[1])
-
-    enabled_precisions = {torch.float16} if opt.precision == "fp16" else {torch.float32}
-
-    stages = [
+        sample = dataset[trace_idx]
+        batch_data = dataset.collate_batch_test([sample])
+        batch_data = train_utils.to_device(batch_data, torch.device("cuda"))
         (
-            "stage1a_pillar_vfe",
-            stage1a_pillar_vfe,
-            (voxel_features, voxel_coords, voxel_num_points),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (voxel_features, voxel_coords, voxel_num_points)),
-        ),
-        (
-            "stage1b_scatter",
-            stage1b_scatter,
-            (voxel_coords, pillar_features),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (voxel_coords, pillar_features)),
-        ),
-        (
-            "stage1c_backbone",
-            stage1c_backbone,
-            (spatial_features,),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (spatial_features,)),
-        ),
-        (
-            "stage1d_neck",
-            stage1d_neck,
-            (spatial_features_2d_backbone,),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (spatial_features_2d_backbone,)),
-        ),
-        (
-            "stage2_regroup",
-            stage_regroup,
-            (spatial_features_2d, prior_encoding),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (spatial_features_2d, prior_encoding)),
-        ),
-        (
-            "stage3a_rte",
-            stage3a_rte,
-            (regroup_feature,),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (regroup_feature,)),
-        ),
-        (
-            "stage3b_sttf",
-            stage3b_sttf,
-            (x_after_rte, spatial_correction_matrix),
-            _build_trt_inputs_from_example_tensors(
-                torch_tensorrt,
+            voxel_features,
+            voxel_coords,
+            voxel_num_points,
+            record_len,
+            prior_encoding,
+            spatial_correction_matrix,
+        ) = _extract_model_inputs_from_batch(batch_data)
+
+        with torch.no_grad():
+            stage1a_pillar_vfe = Stage1aPillarVFE(model).to("cuda").eval()
+            pillar_features = stage1a_pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
+
+            stage1b_scatter = Stage1bScatter(model).to("cuda").eval()
+            spatial_features = stage1b_scatter(voxel_coords, pillar_features)
+
+            stage1c_backbone = Stage1cBackbone(model).to("cuda").eval()
+            spatial_features_2d_backbone = stage1c_backbone(spatial_features)
+
+            stage1d_neck = Stage1dNeck(model).to("cuda").eval()
+            spatial_features_2d = stage1d_neck(spatial_features_2d_backbone)
+
+            stage_regroup = StageRegroup(opt.max_cavs, record_len).to("cuda").eval()
+            regroup_feature, mask = stage_regroup(spatial_features_2d, prior_encoding)
+
+            stage3a_rte = Stage3aRTE(model).to("cuda").eval()
+            x_after_rte, prior_encoding_stage3 = stage3a_rte(regroup_feature)
+
+            stage3b_sttf = Stage3bSTTF(model).to("cuda").eval()
+            x_after_sttf = stage3b_sttf(x_after_rte, spatial_correction_matrix)
+
+            stage3c_hgt_debug = Stage3cHGTCavAttentionDebug(model).to("cuda").eval()
+            x_after_hgt_debug = stage3c_hgt_debug(x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix)
+
+            stage3d_pwindow_debug = Stage3dPyramidWindowAttentionDebug(model).to("cuda").eval()
+            _ = stage3d_pwindow_debug(x_after_hgt_debug)
+
+            stage3e_fusion_blocks = Stage3eFusionBlocks(model).to("cuda").eval()
+            x_after_blocks = stage3e_fusion_blocks(x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix)
+
+            stage3f_fusion_post = Stage3fFusionPost(model).to("cuda").eval()
+            fused_feature = stage3f_fusion_post(x_after_blocks)
+
+            stage5_heads = Stage5Heads(model).to("cuda").eval()
+            _ = stage5_heads(fused_feature)
+
+        enabled_precisions = {torch.float16} if opt.precision == "fp16" else {torch.float32}
+
+        stages = [
+            (
+                "stage1a_pillar_vfe",
+                stage1a_pillar_vfe,
+                (voxel_features, voxel_coords, voxel_num_points),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (voxel_features, voxel_coords, voxel_num_points)),
+            ),
+            (
+                "stage1b_scatter",
+                stage1b_scatter,
+                (voxel_coords, pillar_features),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (voxel_coords, pillar_features)),
+            ),
+            (
+                "stage1c_backbone",
+                stage1c_backbone,
+                (spatial_features,),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (spatial_features,)),
+            ),
+            (
+                "stage1d_neck",
+                stage1d_neck,
+                (spatial_features_2d_backbone,),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (spatial_features_2d_backbone,)),
+            ),
+            (
+                "stage2_regroup",
+                stage_regroup,
+                (spatial_features_2d, prior_encoding),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (spatial_features_2d, prior_encoding)),
+            ),
+            (
+                "stage3a_rte",
+                stage3a_rte,
+                (regroup_feature,),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (regroup_feature,)),
+            ),
+            (
+                "stage3b_sttf",
+                stage3b_sttf,
                 (x_after_rte, spatial_correction_matrix),
+                _build_trt_inputs_from_example_tensors(
+                    torch_tensorrt,
+                    (x_after_rte, spatial_correction_matrix),
+                ),
             ),
-        ),
-        (
-            "stage3c_fusion_blocks",
-            stage3c_fusion_blocks,
-            (x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix),
-            _build_trt_inputs_from_example_tensors(
-                torch_tensorrt,
+            (
+                "stage3c_hgt_cav_attention_debug",
+                stage3c_hgt_debug,
                 (x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix),
+                _build_trt_inputs_from_example_tensors(
+                    torch_tensorrt,
+                    (x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix),
+                ),
             ),
-        ),
-        (
-            "stage3d_fusion_post",
-            stage3d_fusion_post,
-            (x_after_blocks,),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (x_after_blocks,)),
-        ),
-        (
-            "stage4_heads",
-            stage_heads,
-            (fused_feature,),
-            _build_trt_inputs_from_example_tensors(torch_tensorrt, (fused_feature,)),
-        ),
-    ]
+            (
+                "stage3d_pyramid_window_attention_debug",
+                stage3d_pwindow_debug,
+                (x_after_hgt_debug,),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (x_after_hgt_debug,)),
+            ),
+            (
+                "stage3e_fusion_blocks",
+                stage3e_fusion_blocks,
+                (x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix),
+                _build_trt_inputs_from_example_tensors(
+                    torch_tensorrt,
+                    (x_after_sttf, prior_encoding_stage3, mask, spatial_correction_matrix),
+                ),
+            ),
+            (
+                "stage3f_fusion_post",
+                stage3f_fusion_post,
+                (x_after_blocks,),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (x_after_blocks,)),
+            ),
+            (
+                "stage5_heads",
+                stage5_heads,
+                (fused_feature,),
+                _build_trt_inputs_from_example_tensors(torch_tensorrt, (fused_feature,)),
+            ),
+        ]
 
-    summary: Dict[str, Dict[str, object]] = {}
-    executed_stage_count = 0
+        summary: Dict[str, Dict[str, object]] = {}
+        executed_stage_count = 0
 
-    for stage_name, stage_module, example_inputs, trt_inputs in stages:
-        if selected_stage != "all" and stage_name != selected_stage:
-            continue
-        if executed_stage_count > 0:
-            print("\n" + "-" * 52 + "\n")
-        traced, has_cpu_values = _trace_module(stage_module, stage_name, example_inputs, opt.log_dir)
-        ok, err = _try_convert_stage(
-            torch_tensorrt,
-            traced,
-            stage_name,
-            trt_inputs,
-            enabled_precisions,
-            opt.output_dir,
-        )
-        summary[stage_name] = {"trt_ok": ok, "cpu_in_graph": has_cpu_values, "error": err}
-        executed_stage_count += 1
-        if not ok:
-            print(f"Stage failed but continuing for diagnostics: {stage_name}")
+        for stage_name, stage_module, example_inputs, trt_inputs in stages:
+            if selected_stage != "all" and stage_name != selected_stage:
+                continue
+            if executed_stage_count > 0:
+                print("\n" + "-" * 52 + "\n")
+            traced, has_cpu_values = _trace_module(stage_module, stage_name, example_inputs, opt.log_dir)
+            ok, err = _try_convert_stage(
+                torch_tensorrt,
+                traced,
+                stage_name,
+                trt_inputs,
+                enabled_precisions,
+                opt.output_dir,
+            )
+            summary[stage_name] = {"trt_ok": ok, "cpu_in_graph": has_cpu_values, "error": err}
+            executed_stage_count += 1
+            if not ok:
+                print(f"Stage failed but continuing for diagnostics: {stage_name}")
 
-    print(f"\n{'='*15} STAGE CONVERSION SUMMARY {'='*15}")
-    print(f"{'Stage':<28} | {'TRT conversion':<14} | {'CPU in graph':<12}")
-    print("-" * 62)
-    for stage_name, info in summary.items():
-        status = "OK" if info["trt_ok"] else "FAILED"
-        cpu_flag = "YES" if info["cpu_in_graph"] else "NO"
-        print(f"{stage_name:<28} | {status:<14} | {cpu_flag:<12}")
-    print("-" * 62)
+        print(f"\n{'='*15} STAGE CONVERSION SUMMARY {'='*15}")
+        print(f"{'Stage':<40} | {'TRT conversion':<14} | {'CPU in graph':<12}")
+        print("-" * 74)
+        for stage_name, info in summary.items():
+            status = "OK" if info["trt_ok"] else "FAILED"
+            cpu_flag = "YES" if info["cpu_in_graph"] else "NO"
+            print(f"{stage_name:<40} | {status:<14} | {cpu_flag:<12}")
+        print("-" * 74)
 
-    if not summary:
-        print(f"No stage executed for TRT_STAGE={selected_stage}")
+        if not summary:
+            print(f"No stage executed for TRT_STAGE={selected_stage}")
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        log_file.close()
 
 
 if __name__ == "__main__":

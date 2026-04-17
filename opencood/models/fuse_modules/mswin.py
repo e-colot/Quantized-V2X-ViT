@@ -35,7 +35,7 @@ class BaseWindowAttention(nn.Module):
             indices_1d = rel_coords[:, :, 0] * stride + rel_coords[:, :, 1]
             
             # Register the INDEX MAP as a buffer (TensorRT constant)
-            self.register_buffer('rel_idx_1d', indices_1d.flatten().to(torch.int32))
+            self.register_buffer('rel_idx_1d', indices_1d.reshape(-1).to(torch.int32))
             
             # This matches your trained checkpoint shape
             self.pos_embedding = nn.Parameter(torch.randn(stride, stride))
@@ -56,42 +56,45 @@ class BaseWindowAttention(nn.Module):
         h = x.shape[2]
         w = x.shape[3]
         ws = self.window_size
-        new_h = h // ws
-        new_w = w // ws
+
+        device = 'cuda'
+        new_h = torch.tensor(h // ws, dtype=torch.int32, device=device).clamp(min=1)
+        new_w = torch.tensor(w // ws, dtype=torch.int32, device=device).clamp(min=1)
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
 
         q, k, v = qkv
         # all above are (b, l, h, w, c)
 
-        head_dim = q.shape[-1] // self.heads
+        qkv_dim = q.shape[-1]
+        head_dim = torch.tensor(qkv_dim // self.heads, dtype=torch.int32, device=device).clamp(min=1)
      
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        q = q.reshape(b, l, new_h, ws, new_w, ws, -1)
+        q = q.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)
         # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
         q = q.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
         # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
         q = q.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
         # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
-        q = q.flatten(3, 4).flatten(4, 5)
+        q = q.reshape(b, l, self.heads, new_h * new_w, ws * ws, head_dim)
 
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        k = k.reshape(b, l, new_h, ws, new_w, ws, -1)
+        k = k.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)
         # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
         k = k.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
         # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
         k = k.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
         # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
-        k = k.flatten(3, 4).flatten(4, 5)
+        k = k.reshape(b, l, self.heads, new_h * new_w, ws * ws, head_dim)
                 
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        v = v.reshape(b, l, new_h, ws, new_w, ws, -1)
+        v = v.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)
         # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
         v = v.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
         # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
         v = v.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
         # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
-        v = v.flatten(3, 4).flatten(4, 5)
+        v = v.reshape(b, l, self.heads, new_h * new_w, ws * ws, head_dim)
 
         # (b, l, heads, new_h*new_w, w_size*w_size, w_size*w_size)
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
@@ -116,7 +119,7 @@ class BaseWindowAttention(nn.Module):
         # (b, l, heads, new_h, new_w, w_size, w_size, c_head) -> (b, l, new_h, w_size, new_w, w_size, heads, c_head)
         out = out.permute(0, 1, 3, 5, 4, 6, 2, 7).contiguous()
         # (b, l, new_h, w_size, new_w, w_size, heads, c_head) -> (b, l, new_h*w_size, new_w*w_size, heads*c_head)
-        out = out.flatten(2, 3).flatten(3, 4).flatten(4, 5)
+        out = out.reshape(b, l, new_h * ws, new_w * ws, self.heads * head_dim)
 
         # 7. Final Projection
         out = self.to_out(out)
