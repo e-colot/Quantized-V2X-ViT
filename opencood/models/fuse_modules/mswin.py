@@ -22,6 +22,8 @@ class BaseWindowAttention(nn.Module):
         inner_dim = dim_head * heads
 
         self.heads = heads
+        self.inner_dim = inner_dim
+        self.head_dim = dim_head
         self.register_buffer('heads_tensor', torch.tensor(heads, dtype=torch.int32, device='cuda'))
         self.register_buffer('scale', torch.tensor(dim_head ** -0.5, dtype=torch.float32, device='cuda'))
         self.window_size = window_size
@@ -51,26 +53,22 @@ class BaseWindowAttention(nn.Module):
 
     def forward(self, x):
         # x shape: (b, l, h, w, c)
-        b = x.shape[0]
-        l = x.shape[1]
-        h = x.shape[2]
-        w = x.shape[3]
+        b, l, h, w, c = x.shape
         ws = self.window_size
 
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-
-        q, k, v = qkv
+        qkv = self.to_qkv(x)
+        # Prefer explicit split sizes over chunk to avoid zero-length partitions
+        # in TensorRT shape propagation when dimensions are symbolic.
+        q, k, v = torch.split(qkv, self.inner_dim, dim=-1)
         # all above are (b, l, h, w, c)
-
-        qkv_dim = q.shape[-1]
 
         new_h = h // ws
         new_w = w // ws
-        head_dim = qkv_dim // self.heads
+        qkv_dim = self.inner_dim
+        head_dim = self.head_dim
 
         if new_h < 1: new_h = 1
         if new_w < 1: new_w = 1
-        if head_dim < 1: head_dim = 1
      
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
         q = q.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)
@@ -118,7 +116,7 @@ class BaseWindowAttention(nn.Module):
         out = torch.matmul(attn, v)
 
         # (b, l, heads, new_h*new_w, w_size*w_size, c_head) -> (b, l, heads, new_h, new_w, w_size, w_size, c_head)
-        out = out.reshape(b, l, self.heads, new_h, new_w, ws, ws, -1)
+        out = out.reshape(b, l, self.heads, new_h, new_w, ws, ws, head_dim)
         # (b, l, heads, new_h, new_w, w_size, w_size, c_head) -> (b, l, new_h, w_size, new_w, w_size, heads, c_head)
         out = out.permute(0, 1, 3, 5, 4, 6, 2, 7).contiguous()
         # (b, l, new_h, w_size, new_w, w_size, heads, c_head) -> (b, l, new_h*w_size, new_w*w_size, heads*c_head)

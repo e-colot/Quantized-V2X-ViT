@@ -1,3 +1,4 @@
+import json
 import importlib
 import os
 import shutil
@@ -19,6 +20,7 @@ class Arguments:
     model_dir: str = "opencood/v2x-vit"
     output_dir: str = "tensorRT/split_debug/engines"
     log_dir: str = "tensorRT/split_debug/logs"
+    validation_shape_log_path: str = "tensorRT/split_debug/build_split_trt_engines.validation_shapes.log"
     precision: str = "fp32"  # fp16 or fp32
     max_cavs: int = 5
 
@@ -292,8 +294,34 @@ def _scenario_edge_indices(opencood_dataset):
     return list(dict.fromkeys(starts + lasts))
 
 
-def _collect_validation_shapes(hypes):
+def _load_validation_shapes_cache(validation_shape_log_path):
+    if not os.path.exists(validation_shape_log_path):
+        return None
+
+    with open(validation_shape_log_path, "r", encoding="utf-8") as f:
+        cached = json.load(f)
+
+    shapes = cached.get("per_sequence_shapes")
+    if not isinstance(shapes, list):
+        return None
+
+    print(f"Reusing cached validation shape log: {validation_shape_log_path}")
+    return shapes
+
+
+def _write_validation_shapes_cache(validation_shape_log_path, per_sequence_shapes):
+    os.makedirs(os.path.dirname(validation_shape_log_path), exist_ok=True)
+    with open(validation_shape_log_path, "w", encoding="utf-8") as f:
+        json.dump({"per_sequence_shapes": per_sequence_shapes}, f, indent=2)
+    print(f"Validation shape log written to: {validation_shape_log_path}")
+
+
+def _collect_validation_shapes(hypes, validation_shape_log_path):
     dataset = build_dataset(hypes, visualize=False, train=False)
+    cached_per_sequence_shapes = _load_validation_shapes_cache(validation_shape_log_path)
+    if cached_per_sequence_shapes is not None:
+        return dataset, cached_per_sequence_shapes
+
     edge_indices = _scenario_edge_indices(dataset)
 
     per_sequence_shapes = []
@@ -313,6 +341,7 @@ def _collect_validation_shapes(hypes):
             }
         )
 
+    _write_validation_shapes_cache(validation_shape_log_path, per_sequence_shapes)
     return dataset, per_sequence_shapes
 
 
@@ -467,10 +496,15 @@ def _build_trt_inputs_from_example_tensors(torch_tensorrt, example_inputs):
             dtype = torch.int32
         else:
             dtype = x.dtype
-            
+
+        # Use an explicit profile even for fixed-size tensors to avoid
+        # converter shape-propagation paths that can materialize empty tensors.
+        shape = tuple(int(d) for d in x.shape)
         trt_inputs.append(torch_tensorrt.Input(
-            shape=x.shape,
-            dtype=dtype # Explicitly enforce Int32 here
+            min_shape=shape,
+            opt_shape=shape,
+            max_shape=shape,
+            dtype=dtype,
         ))
     return trt_inputs
 
@@ -545,7 +579,7 @@ def main():
         model.eval()
 
         print("Collecting trace input from validation dataset...")
-        dataset, per_sequence_shapes = _collect_validation_shapes(hypes)
+        dataset, per_sequence_shapes = _collect_validation_shapes(hypes, opt.validation_shape_log_path)
         _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes)
         trace_idx = _select_trace_dataset_index(per_sequence_shapes, opt)
 

@@ -5,20 +5,17 @@ import torch.nn as nn
 class PointPillarScatter(nn.Module):
     def __init__(self, model_cfg):
         super().__init__()
-        device = 'cuda'
-
         self.model_cfg = model_cfg
         self.num_bev_features = self.model_cfg['num_features']
         self.max_cav = self.model_cfg.get('max_cav', None)
         
         grid_size = model_cfg['grid_size']
-        self.nx = torch.tensor([grid_size[0]], dtype=torch.int32, device=device)
-        self.ny = torch.tensor([grid_size[1]], dtype=torch.int32, device=device)
-        self.nz = torch.tensor([grid_size[2]], dtype=torch.int32, device=device)
+        self.nx = int(grid_size[0])
+        self.ny = int(grid_size[1])
+        self.nz = int(grid_size[2])
 
         self.num_pixels = self.ny * self.nx
-
-        self.canvas_size = torch.tensor([self.num_bev_features, self.nx * self.ny * self.max_cav], device=device, dtype=torch.int32).clamp(min=1)
+        self.canvas_size = (self.num_bev_features, self.nx * self.ny * self.max_cav)
         
         assert self.nz == 1
 
@@ -26,7 +23,7 @@ class PointPillarScatter(nn.Module):
         indices = (voxel_coords[:, 0] * self.num_pixels + voxel_coords[:, 2] * self.nx + voxel_coords[:, 3])
 
         # canvas: [C, B*max_cav*H*W]
-        canvas = torch.zeros((self.canvas_size[0], self.canvas_size[1]), dtype=pillar_features.dtype, device='cuda')
+        canvas = torch.zeros(self.canvas_size, dtype=pillar_features.dtype, device=pillar_features.device)
 
         indices_expanded = indices.unsqueeze(0).expand(self.num_bev_features, -1)
         canvas.scatter_(1, indices_expanded, pillar_features.t())

@@ -1,3 +1,4 @@
+import json
 import os
 import importlib
 from typing import Optional
@@ -13,12 +14,15 @@ class Arguments:
     def __init__(self):
         self.model_dir = 'opencood/v2x-vit'
         self.fusion_method = 'intermediate'
-        self.engine_path = 'tensorRT/v2xvit_fp32.engine'
+        self.engine_path = 'tensorRT/v2xvit_fp32'
         self.graph_log_path = 'tensorRT/build_trt_engine.graphs.log'
+        self.validation_shape_log_path = 'tensorRT/build_trt_engine.validation_shapes.log'
         self.precision = 'fp32'  # 'fp16' or 'fp32'
         self.device = 'cuda:0'
 
         # Dynamic range for num_voxels (dim 0 of lidar tensors).
+        # These are fallback values only; final limits are derived from
+        # validation dataset shapes in _apply_voxel_shape_ranges_from_samples.
         self.min_num_voxels = 1000
         self.opt_num_voxels = 12000
         self.max_num_voxels = 40000
@@ -93,15 +97,41 @@ def _extract_model_inputs_from_batch(batch_data):
     return (
         processed['voxel_features'].to(torch.float32),
         processed['voxel_coords'].to(torch.int32),
-        processed['voxel_num_points'].to(torch.int32),
+        processed['voxel_num_points'].to(torch.float32),
         ego['record_len'].to(torch.int32),
         ego['prior_encoding'].to(torch.float32),
         ego['spatial_correction_matrix'].to(torch.float32),
     )
 
 
-def _collect_validation_shapes(hypes):
+def _load_validation_shapes_cache(validation_shape_log_path):
+    if not os.path.exists(validation_shape_log_path):
+        return None
+
+    with open(validation_shape_log_path, 'r', encoding='utf-8') as f:
+        cached = json.load(f)
+
+    shapes = cached.get('per_sequence_shapes')
+    if not isinstance(shapes, list):
+        return None
+
+    print(f'Reusing cached validation shape log: {validation_shape_log_path}')
+    return shapes
+
+
+def _write_validation_shapes_cache(validation_shape_log_path, per_sequence_shapes):
+    os.makedirs(os.path.dirname(validation_shape_log_path), exist_ok=True)
+    with open(validation_shape_log_path, 'w', encoding='utf-8') as f:
+        json.dump({'per_sequence_shapes': per_sequence_shapes}, f, indent=2)
+    print(f'Validation shape log written to: {validation_shape_log_path}')
+
+
+def _collect_validation_shapes(hypes, validation_shape_log_path):
     dataset = build_dataset(hypes, visualize=False, train=False)
+    cached_per_sequence_shapes = _load_validation_shapes_cache(validation_shape_log_path)
+    if cached_per_sequence_shapes is not None:
+        return dataset, cached_per_sequence_shapes
+
     edge_indices = _scenario_edge_indices(dataset)
 
     per_sequence_shapes = []
@@ -119,6 +149,7 @@ def _collect_validation_shapes(hypes):
             'spatial_correction_matrix': tuple(inputs[5].shape),
         })
 
+    _write_validation_shapes_cache(validation_shape_log_path, per_sequence_shapes)
     return dataset, per_sequence_shapes
 
 
@@ -149,10 +180,10 @@ def _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes):
     observed_max = voxel_counts[-1]
     observed_opt = voxel_counts[len(voxel_counts) // 2]
 
-    # Expand TRT dynamic profile to include observed first+last frame shapes.
-    opt.min_num_voxels = min(opt.min_num_voxels, observed_min)
-    opt.max_num_voxels = max(opt.max_num_voxels, observed_max)
-    opt.opt_num_voxels = min(max(opt.opt_num_voxels, opt.min_num_voxels), opt.max_num_voxels)
+    # Derive TRT profile directly from validation dataset samples.
+    opt.min_num_voxels = int(observed_min)
+    opt.opt_num_voxels = int(observed_opt)
+    opt.max_num_voxels = int(observed_max)
 
     print(
         'TensorRT voxel profile after dataset sampling: '
@@ -188,11 +219,23 @@ def _build_trt_inputs(opt, torch_tensorrt):
             name="voxel_num_points"
         ),
         # 4. record_len
-        torch_tensorrt.Input(shape=(1,), dtype=torch.int32, name="record_len"),
+        torch_tensorrt.Input(min_shape=(1,), opt_shape=(1,), max_shape=(1,), dtype=torch.int32, name="record_len"),
         # 5. prior_encoding
-        torch_tensorrt.Input(shape=(1, opt.max_cavs, 3), dtype=torch.float32, name="prior_encoding"),
+        torch_tensorrt.Input(
+            min_shape=(1, opt.max_cavs, 3),
+            opt_shape=(1, opt.max_cavs, 3),
+            max_shape=(1, opt.max_cavs, 3),
+            dtype=torch.float32,
+            name="prior_encoding",
+        ),
         # 6. spatial_correction_matrix (Matches your inference call order)
-        torch_tensorrt.Input(shape=(1, opt.max_cavs, 4, 4), dtype=torch.float32, name="spatial_correction_matrix"),
+        torch_tensorrt.Input(
+            min_shape=(1, opt.max_cavs, 4, 4),
+            opt_shape=(1, opt.max_cavs, 4, 4),
+            max_shape=(1, opt.max_cavs, 4, 4),
+            dtype=torch.float32,
+            name="spatial_correction_matrix",
+        ),
     ]
 
 
@@ -228,7 +271,7 @@ def _prepare_torchscript_module(adapter, opt, hypes):
 
     # Tracing fallback with real validation data (1 sample per sequence for shape collection).
     print('Collecting trace shapes from validation dataset...')
-    dataset, per_sequence_shapes = _collect_validation_shapes(hypes)
+    dataset, per_sequence_shapes = _collect_validation_shapes(hypes, opt.validation_shape_log_path)
     # _print_shape_summary(per_sequence_shapes)
     _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes)
 
