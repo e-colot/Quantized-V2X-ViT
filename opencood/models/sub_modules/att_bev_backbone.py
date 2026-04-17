@@ -111,13 +111,11 @@ class AttBEVBackbone(nn.Module):
 
         self.num_bev_features = c_in
 
-    def forward(self, data_dict):
-        spatial_features = data_dict['spatial_features']
-        record_len = data_dict['record_len']
+    def forward(self, batch_spatial_features, record_len):
 
         ups = []
         # ret_dict = {}
-        x = spatial_features
+        x = batch_spatial_features
 
         for i in range(len(self.blocks)):
             x = self.blocks[i](x)
@@ -125,8 +123,8 @@ class AttBEVBackbone(nn.Module):
                 x = self.compression_modules[i](x)
             x_fuse = self.fuse_modules[i](x, record_len)
 
-            # stride = int(spatial_features.shape[2] / x.shape[2])
-            # ret_dict['spatial_features_%dx' % stride] = x
+            # stride = int(batch_spatial_features.shape[2] / x.shape[2])
+            # ret_dict['batch_spatial_features_%dx' % stride] = x
 
             if len(self.deblocks) > 0:
                 ups.append(self.deblocks[i](x_fuse))
@@ -141,5 +139,5 @@ class AttBEVBackbone(nn.Module):
         if len(self.deblocks) > len(self.blocks):
             x = self.deblocks[-1](x)
 
-        data_dict['spatial_features_2d'] = x
-        return data_dict
+        spatial_features_2d = x
+        return spatial_features_2d

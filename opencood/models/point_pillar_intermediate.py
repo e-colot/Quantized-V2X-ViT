@@ -36,16 +36,9 @@ class PointPillarIntermediate(nn.Module):
         voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
         record_len = data_dict['record_len']
 
-        batch_dict = {'voxel_features': voxel_features,
-                      'voxel_coords': voxel_coords,
-                      'voxel_num_points': voxel_num_points,
-                      'record_len': record_len}
-
-        batch_dict = self.pillar_vfe(batch_dict)
-        batch_dict = self.scatter(batch_dict)
-        batch_dict = self.backbone(batch_dict)
-
-        spatial_features_2d = batch_dict['spatial_features_2d']
+        pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
+        batch_spatial_features = self.scatter(voxel_coords, pillar_features)
+        spatial_features_2d = self.backbone(batch_spatial_features, record_len)
 
         psm = self.cls_head(spatial_features_2d)
         rm = self.reg_head(spatial_features_2d)

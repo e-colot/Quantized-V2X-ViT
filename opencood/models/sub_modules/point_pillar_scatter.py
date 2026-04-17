@@ -20,16 +20,30 @@ class PointPillarScatter(nn.Module):
         assert self.nz == 1
 
     def forward(self, voxel_coords, pillar_features):
-        indices = (voxel_coords[:, 0] * self.num_pixels + voxel_coords[:, 2] * self.nx + voxel_coords[:, 3])
+        if voxel_coords.numel() == 0:
+            raise ValueError('PointPillarScatter received an empty voxel_coords tensor.')
+
+        batch_size = int(voxel_coords[:, 0].max().item()) + 1
+        indices = (voxel_coords[:, 0] * self.num_pixels + voxel_coords[:, 2] * self.nx + voxel_coords[:, 3]).long()
+
+        if indices.min().item() < 0 or indices.max().item() >= batch_size * self.num_pixels:
+            raise ValueError(
+                f'PointPillarScatter index out of range: min={indices.min().item()}, '
+                f'max={indices.max().item()}, capacity={batch_size * self.num_pixels}'
+            )
 
         # canvas: [C, B*max_cav*H*W]
-        canvas = torch.zeros(self.canvas_size, dtype=pillar_features.dtype, device=pillar_features.device)
+        canvas = torch.zeros(
+            (self.num_bev_features, batch_size * self.num_pixels),
+            dtype=pillar_features.dtype,
+            device=pillar_features.device,
+        )
 
         indices_expanded = indices.unsqueeze(0).expand(self.num_bev_features, -1)
         canvas.scatter_(1, indices_expanded, pillar_features.t())
 
-        # reshape and permute to [B*max_cav, C, H, W]
-        batch_spatial_features = canvas.view(self.num_bev_features, self.max_cav, self.ny, self.nx)
+        # reshape and permute to [total_cavs_in_batch, C, H, W]
+        batch_spatial_features = canvas.view(self.num_bev_features, batch_size, self.ny, self.nx)
         batch_spatial_features = batch_spatial_features.permute(1, 0, 2, 3).contiguous()
 
         return batch_spatial_features

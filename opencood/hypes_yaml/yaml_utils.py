@@ -114,6 +114,7 @@ def load_point_pillar_params(param):
                 np.array(voxel_size)
     grid_size = np.round(grid_size).astype(np.int64)
     param['model']['args']['point_pillar_scatter']['grid_size'] = grid_size
+    param['model']['args']['point_pillar_scatter']['max_cav'] = param['model']['args']['max_cav']
 
     anchor_args = param['postprocess']['anchor_args']
 

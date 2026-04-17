@@ -1,6 +1,6 @@
 name: point_pillar_intermediate_fusion
-root_dir: "opv2v_data_dumping/train"
-validate_dir: "opv2v_data_dumping/validate"
+root_dir: '/home/user/datasets/v2xset/train'
+validate_dir: '/home/user/datasets/v2xset/validate'
 
 yaml_parser: "load_point_pillar_params"
 train_params:
@@ -61,6 +61,7 @@ model:
     voxel_size: *voxel_size
     lidar_range: *cav_lidar
     anchor_number: *achor_num
+    max_cav: &max_cav 5
 
     pillar_vfe:
       use_norm: true
