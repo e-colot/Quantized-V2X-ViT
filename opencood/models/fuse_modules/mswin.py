@@ -57,17 +57,20 @@ class BaseWindowAttention(nn.Module):
         w = x.shape[3]
         ws = self.window_size
 
-        device = 'cuda'
-        new_h = torch.tensor(h // ws, dtype=torch.int32, device=device).clamp(min=1)
-        new_w = torch.tensor(w // ws, dtype=torch.int32, device=device).clamp(min=1)
-
         qkv = self.to_qkv(x).chunk(3, dim=-1)
 
         q, k, v = qkv
         # all above are (b, l, h, w, c)
 
         qkv_dim = q.shape[-1]
-        head_dim = torch.tensor(qkv_dim // self.heads, dtype=torch.int32, device=device).clamp(min=1)
+
+        new_h = h // ws
+        new_w = w // ws
+        head_dim = qkv_dim // self.heads
+
+        if new_h < 1: new_h = 1
+        if new_w < 1: new_w = 1
+        if head_dim < 1: head_dim = 1
      
         # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
         q = q.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)

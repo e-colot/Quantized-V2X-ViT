@@ -415,6 +415,7 @@ def _try_convert_stage(
     trt_inputs: List,
     enabled_precisions: set,
     output_dir: str,
+    require_full_compilation: bool,
 ):
     print(f"[{stage_name}] TRT conversion started")
     try:
@@ -424,7 +425,7 @@ def _try_convert_stage(
             inputs=trt_inputs,
             enabled_precisions=enabled_precisions,
             truncate_long_and_double=True,
-            require_full_compilation=False,
+            require_full_compilation=require_full_compilation,
             workspace_size=1 << 33,
         )
         module_path = os.path.join(output_dir, f"{stage_name}.ts")
@@ -502,6 +503,13 @@ def main():
     opt = Arguments()
     assert opt.precision in ["fp16", "fp32"]
     selected_stage = os.environ.get("TRT_STAGE", "all")
+    require_full_compilation = os.environ.get("TRT_REQUIRE_FULL_COMPILATION", "1") not in {
+        "0",
+        "false",
+        "False",
+        "no",
+        "NO",
+    }
     valid_stage_names = {
         "all",
         "stage1a_pillar_vfe",
@@ -528,6 +536,7 @@ def main():
     try:
         _clean_logs_dir(opt.log_dir, preserve=(terminal_log_name,))
         torch_tensorrt = importlib.import_module("torch_tensorrt")
+        print(f"TRT require_full_compilation={require_full_compilation}")
 
         print("Loading OpenCOOD config and model...")
         hypes = yaml_utils.load_yaml(None, opt)
@@ -683,6 +692,12 @@ def main():
                 continue
             if executed_stage_count > 0:
                 print("\n" + "-" * 52 + "\n")
+            if stage_name == "stage3d_pyramid_window_attention_debug":
+                x_stage3d = example_inputs[0]
+                print(
+                    f"[{stage_name}] example input shape={tuple(x_stage3d.shape)} "
+                    f"numel={x_stage3d.numel()} dtype={x_stage3d.dtype} device={x_stage3d.device}"
+                )
             traced, has_cpu_values = _trace_module(stage_module, stage_name, example_inputs, opt.log_dir)
             ok, err = _try_convert_stage(
                 torch_tensorrt,
@@ -691,6 +706,7 @@ def main():
                 trt_inputs,
                 enabled_precisions,
                 opt.output_dir,
+                require_full_compilation,
             )
             summary[stage_name] = {"trt_ok": ok, "cpu_in_graph": has_cpu_values, "error": err}
             executed_stage_count += 1

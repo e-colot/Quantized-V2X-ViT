@@ -318,7 +318,7 @@ def main():
         inputs=trt_inputs,
         enabled_precisions=enabled_precisions,
         truncate_long_and_double=True,
-        require_full_compilation=False,
+            require_full_compilation=True,
         workspace_size=1 << 33, # 8GB
     )
 
