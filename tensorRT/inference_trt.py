@@ -2,6 +2,7 @@
 
 import argparse
 import importlib
+import json
 import os
 from collections import OrderedDict
 
@@ -15,11 +16,22 @@ from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils
 
 
+def _ensure_torch_tensorrt_loaded():
+    # TorchScript TRT modules require torch_tensorrt to register custom classes.
+    try:
+        import torch_tensorrt  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            'Failed to import torch_tensorrt. This is required before loading '
+            'TensorRT TorchScript modules (*.ts).'
+        ) from exc
+
+
 class Arguments:
     def __init__(self):
         print('Default parameters used')
         self.model_dir = 'opencood/v2x-vit'
-        self.engine_path = 'tensorRT/v2xvit_fp32.ts'
+        self.engine_path = 'tensorRT/v2xvit_fp32.manifest.json'
         self.fusion_method = 'intermediate'
         self.num_workers = 16
         self.max_batches = -1
@@ -96,6 +108,84 @@ def _run_trt_engine(trt_model, model_inputs):
     )
 
 
+def _load_trt_runtime(engine_path, device):
+    _ensure_torch_tensorrt_loaded()
+
+    if engine_path.endswith('.json'):
+        with open(engine_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+        if manifest.get('type') != 'multi_engine_by_record_len':
+            raise RuntimeError(f'Unsupported manifest type in {engine_path}: {manifest.get("type")}')
+        engines = manifest.get('engines', [])
+        if not engines:
+            raise RuntimeError(f'No engines listed in manifest: {engine_path}')
+        indexed_engines = []
+        for item in engines:
+            record_len = int(item['record_len'])
+            module_path = item['engine_path']
+            if not os.path.exists(module_path):
+                raise FileNotFoundError(f'Engine module not found for record_len={record_len}: {module_path}')
+            indexed_engines.append(
+                {
+                    'record_len': record_len,
+                    'min_num_voxels': int(item.get('min_num_voxels', -1)),
+                    'max_num_voxels': int(item.get('max_num_voxels', -1)),
+                    'module': torch.jit.load(module_path, map_location=device).eval(),
+                }
+            )
+        return {'mode': 'multi', 'engines': indexed_engines, 'manifest_path': engine_path}
+
+    if not os.path.exists(engine_path):
+        raise FileNotFoundError(f'TensorRT engine module not found: {engine_path}')
+    module = torch.jit.load(engine_path, map_location=device)
+    module.eval()
+    return {'mode': 'single', 'module': module, 'engine_path': engine_path}
+
+
+def _range_distance(value, lo, hi):
+    if lo <= value <= hi:
+        return 0
+    if value < lo:
+        return lo - value
+    return value - hi
+
+
+def _select_trt_module(runtime_state, record_len_value, num_voxels_value):
+    if runtime_state['mode'] == 'single':
+        return runtime_state['module']
+
+    engines = runtime_state['engines']
+    same_record_len = [e for e in engines if e['record_len'] == record_len_value]
+    in_range_same_record_len = [
+        e
+        for e in same_record_len
+        if e['min_num_voxels'] <= num_voxels_value <= e['max_num_voxels']
+    ]
+    if in_range_same_record_len:
+        return in_range_same_record_len[0]['module']
+
+    in_range_any = [
+        e
+        for e in engines
+        if e['min_num_voxels'] <= num_voxels_value <= e['max_num_voxels']
+    ]
+    if in_range_any:
+        best = min(
+            in_range_any,
+            key=lambda e: abs(e['record_len'] - record_len_value),
+        )
+        return best['module']
+
+    best = min(
+        engines,
+        key=lambda e: (
+            _range_distance(num_voxels_value, e['min_num_voxels'], e['max_num_voxels']),
+            abs(e['record_len'] - record_len_value),
+        ),
+    )
+    return best['module']
+
+
 def _inference_with_trt(batch_data, trt_model, dataset):
     cav_content = batch_data['ego']
     model_inputs = _extract_model_inputs(cav_content)
@@ -114,7 +204,7 @@ def main():
     )
 
     if not os.path.exists(opt.engine_path):
-        raise FileNotFoundError(f'TensorRT engine module not found: {opt.engine_path}')
+        raise FileNotFoundError(f'TensorRT engine/manifest not found: {opt.engine_path}')
 
     hypes = yaml_utils.load_yaml(None, opt)
 
@@ -140,9 +230,8 @@ def main():
     # Register TensorRT TorchScript custom classes before torch.jit.load.
     importlib.import_module('torch_tensorrt')
 
-    print(f'Loading TensorRT TorchScript module from: {opt.engine_path}')
-    trt_model = torch.jit.load(opt.engine_path, map_location=device)
-    trt_model.eval()
+    print(f'Loading TensorRT runtime from: {opt.engine_path}')
+    runtime_state = _load_trt_runtime(opt.engine_path, device)
 
     # Keep the same structure as torch inference metrics.
     result_stat = {
@@ -162,6 +251,10 @@ def main():
     for i, batch_data in enumerate(progress_bar):
         with torch.no_grad():
             batch_data = train_utils.to_device(batch_data, device)
+
+            record_len_value = int(batch_data['ego']['record_len'].reshape(-1)[0].item())
+            num_voxels_value = int(batch_data['ego']['processed_lidar']['voxel_features'].shape[0])
+            trt_model = _select_trt_module(runtime_state, record_len_value, num_voxels_value)
 
             pred_box_tensor, pred_score, gt_box_tensor = _inference_with_trt(
                 batch_data,

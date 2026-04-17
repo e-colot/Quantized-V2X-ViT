@@ -26,6 +26,8 @@ class Arguments:
         self.min_num_voxels = 1000
         self.opt_num_voxels = 12000
         self.max_num_voxels = 40000
+        self.profile_min_margin = 0.90
+        self.profile_max_margin = 1.20
 
         # Fixed shapes used by this model path.
         self.max_points_per_voxel = 32
@@ -115,6 +117,9 @@ def _load_validation_shapes_cache(validation_shape_log_path):
     if not isinstance(shapes, list):
         return None
 
+    if not all(isinstance(s, dict) and 'record_len_value' in s for s in shapes):
+        return None
+
     print(f'Reusing cached validation shape log: {validation_shape_log_path}')
     return shapes
 
@@ -145,6 +150,7 @@ def _collect_validation_shapes(hypes, validation_shape_log_path):
             'voxel_coords': tuple(inputs[1].shape),
             'voxel_num_points': tuple(inputs[2].shape),
             'record_len': tuple(inputs[3].shape),
+            'record_len_value': int(inputs[3].reshape(-1)[0].item()),
             'prior_encoding': tuple(inputs[4].shape),
             'spatial_correction_matrix': tuple(inputs[5].shape),
         })
@@ -190,6 +196,26 @@ def _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes):
         f'min={opt.min_num_voxels}, opt={opt.opt_num_voxels}, max={opt.max_num_voxels} '
         f'(observed median={observed_opt})'
     )
+
+
+def _group_shapes_by_record_len(per_sequence_shapes):
+    grouped = {}
+    for item in per_sequence_shapes:
+        key = int(item['record_len_value'])
+        grouped.setdefault(key, []).append(item)
+    return grouped
+
+
+def _build_bucket_profile(bucket_shapes, min_margin, max_margin):
+    voxel_counts = sorted(s['voxel_features'][0] for s in bucket_shapes)
+    observed_min = int(voxel_counts[0])
+    observed_max = int(voxel_counts[-1])
+    observed_opt = int(voxel_counts[len(voxel_counts) // 2])
+
+    min_num_voxels = max(1, int(observed_min * min_margin))
+    max_num_voxels = max(observed_max, int(observed_max * max_margin))
+    opt_num_voxels = min(max(observed_opt, min_num_voxels), max_num_voxels)
+    return min_num_voxels, opt_num_voxels, max_num_voxels
 
 
 def _build_trt_inputs(opt, torch_tensorrt):
@@ -261,29 +287,8 @@ def _write_graph_dump(graph_log_path: str, traced_module: torch.jit.ScriptModule
         f.write('\n')
     print(f'TorchScript graph dump written to: {graph_log_path}')
 
-def _prepare_torchscript_module(adapter, opt, hypes):
-    # Try Scripting first if enabled
-    if opt.try_script_first:
-        scripted_adapter = _try_script_module(adapter, 'adapter')
-        if scripted_adapter is not None:
-            return scripted_adapter
-        print("Scripting failed, falling back to tracing...")
-
-    # Tracing fallback with real validation data (1 sample per sequence for shape collection).
-    print('Collecting trace shapes from validation dataset...')
-    dataset, per_sequence_shapes = _collect_validation_shapes(hypes, opt.validation_shape_log_path)
-    # _print_shape_summary(per_sequence_shapes)
-    _apply_voxel_shape_ranges_from_samples(opt, per_sequence_shapes)
-
-    trace_idx = _select_trace_dataset_index(per_sequence_shapes, opt)
-    print(f'Tracing the adapter using validation dataset index: {trace_idx}')
-    trace_sample = dataset[trace_idx]
-    trace_batch = dataset.collate_batch_test([trace_sample])
-    trace_batch = train_utils.to_device(trace_batch, torch.device('cuda'))
-    trace_inputs = _extract_model_inputs_from_batch(trace_batch)
-
+def _trace_adapter(adapter, trace_inputs, graph_log_path):
     try:
-        # Trace the model
         traced_adapter = torch.jit.trace(adapter, trace_inputs)
 
 # ----------------------- START GRAPH CLEANUP -----------------------
@@ -308,7 +313,7 @@ def _prepare_torchscript_module(adapter, opt, hypes):
         
         print("Successfully traced the adapter.")
 
-        _write_graph_dump(opt.graph_log_path, traced_adapter)
+        _write_graph_dump(graph_log_path, traced_adapter)
 
         # Search specifically for the 'item' node in the graph string
         graph_str = str(traced_adapter.graph)
@@ -344,30 +349,78 @@ def main():
         else:
             print('Whole-model scripting failed; continuing with eager model.')
 
-    print('Preparing TorchScript adapter')
+    print('Collecting validation shapes for multi-engine dynamic build...')
+    dataset, per_sequence_shapes = _collect_validation_shapes(hypes, opt.validation_shape_log_path)
+    buckets = _group_shapes_by_record_len(per_sequence_shapes)
+    if not buckets:
+        raise RuntimeError('No validation buckets found for multi-engine build.')
+
+    manifest_path = f"{opt.engine_path}.manifest.json"
+    manifest = {
+        'type': 'multi_engine_by_record_len',
+        'base_engine_path': opt.engine_path,
+        'precision': opt.precision,
+        'engines': [],
+    }
+
+    print(f'Preparing TorchScript adapter')
     adapter = TRTInputAdapter(model).to('cuda').eval()
-    scripted = _prepare_torchscript_module(adapter, opt, hypes)
-
     enabled_precisions = {torch.float16} if opt.precision == 'fp16' else {torch.float32}
-    trt_inputs = _build_trt_inputs(opt, torch_tensorrt)
 
-    print('Converting model using unified compile API...')
-    
-    # trt_inputs is already built correctly in your script
-    
-    trt_model = torch_tensorrt.compile(
-        scripted,
-        ir="ts", # This tells it to use the TorchScript backend
-        inputs=trt_inputs,
-        enabled_precisions=enabled_precisions,
-        truncate_long_and_double=True,
+    for record_len_value in sorted(buckets.keys()):
+        bucket_shapes = buckets[record_len_value]
+        print(f'\nBuilding dynamic TRT engine for record_len={record_len_value} with {len(bucket_shapes)} samples')
+
+        min_nv, opt_nv, max_nv = _build_bucket_profile(
+            bucket_shapes,
+            opt.profile_min_margin,
+            opt.profile_max_margin,
+        )
+        opt.min_num_voxels = min_nv
+        opt.opt_num_voxels = opt_nv
+        opt.max_num_voxels = max_nv
+        print(f'Profile record_len={record_len_value}: min={min_nv}, opt={opt_nv}, max={max_nv}')
+
+        trace_idx = _select_trace_dataset_index(bucket_shapes, opt)
+        print(f'Tracing adapter for record_len={record_len_value} with dataset index {trace_idx}')
+        trace_sample = dataset[trace_idx]
+        trace_batch = dataset.collate_batch_test([trace_sample])
+        trace_batch = train_utils.to_device(trace_batch, torch.device('cuda'))
+        trace_inputs = _extract_model_inputs_from_batch(trace_batch)
+
+        graph_log_path = f"{opt.engine_path}.record_len_{record_len_value}.graphs.log"
+        scripted = _trace_adapter(adapter, trace_inputs, graph_log_path)
+        trt_inputs = _build_trt_inputs(opt, torch_tensorrt)
+
+        print('Converting model using unified compile API...')
+        trt_model = torch_tensorrt.compile(
+            scripted,
+            ir="ts",
+            inputs=trt_inputs,
+            enabled_precisions=enabled_precisions,
+            truncate_long_and_double=True,
+            allow_shape_tensors=True,
             require_full_compilation=True,
-        workspace_size=1 << 33, # 8GB
-    )
+            workspace_size=1 << 33,
+        )
 
-    # Instead of engine_bytes, we save the compiled module
-    print(f'Saving compiled TRT model to {opt.engine_path}.ts')
-    torch.jit.save(trt_model, opt.engine_path + ".ts")
+        engine_path = f"{opt.engine_path}.record_len_{record_len_value}.ts"
+        print(f'Saving compiled TRT model to {engine_path}')
+        torch.jit.save(trt_model, engine_path)
+
+        manifest['engines'].append(
+            {
+                'record_len': int(record_len_value),
+                'engine_path': engine_path,
+                'min_num_voxels': min_nv,
+                'opt_num_voxels': opt_nv,
+                'max_num_voxels': max_nv,
+            }
+        )
+
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2)
+    print(f'Wrote multi-engine manifest: {manifest_path}')
 
 
 if __name__ == '__main__':
