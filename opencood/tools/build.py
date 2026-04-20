@@ -61,48 +61,57 @@ def load_model(opt=None):
     saved_path = opt.model_dir
     _, model = train_utils.load_saved_model(saved_path, model)
 
+    used_dataset = hypes['validate_dir'].split('/')[-1]
+    if used_dataset == 'validate':
+        opt.min_v = 4707
+        opt.opt_v = 11763
+        opt.max_v = 18658
+        opt.opt_cavs = 3
+    elif used_dataset == 'test':
+        opt.min_v = 3662
+        opt.opt_v = 12793
+        opt.max_v = 26295
+        opt.opt_cavs = 3
+    else:
+        raise NotImplementedError
+
     return model.eval().cuda(), hypes, opt
 
-def build_inputs(hypes):
-
-    min_v = 4712
-    opt_v = 11769
-    max_v = 18793
+def build_inputs(hypes, opt):
     max_cavs = hypes['model']['args']['max_cav']
-    opt_cavs = 3
     device = 'cuda'
 
     inputs = (
-        torch.randn((opt_v, 32, 4), dtype=torch.float32).to(device),      # voxel_features
-        torch.zeros((opt_v, 4), dtype=torch.int32).to(device),            # voxel_coords
-        torch.zeros((opt_v,), dtype=torch.float32).to(device),              # voxel_num_points
+        torch.randn((opt.opt_v, 32, 4), dtype=torch.float32).to(device),      # voxel_features
+        torch.zeros((opt.opt_v, 4), dtype=torch.int32).to(device),            # voxel_coords
+        torch.zeros((opt.opt_v,), dtype=torch.float32).to(device),              # voxel_num_points
         torch.ones((1,), dtype=torch.int32).to(device),            # record_len
-        torch.randn((1, 7, 4, 4), dtype=torch.float32).to(device),        # spatial_correction_matrix
-        torch.randn((1, 7, 3), dtype=torch.float32).to(device)            # prior_encoding
+        torch.randn((1, max_cavs, 4, 4), dtype=torch.float32).to(device),        # spatial_correction_matrix
+        torch.randn((1, max_cavs, 3), dtype=torch.float32).to(device)            # prior_encoding
     )
 
     trt_inputs = [
         torch_tensorrt.Input(
-            min_shape=[min_v, 32, 4], 
-            opt_shape=[opt_v, 32, 4], 
-            max_shape=[max_v, 32, 4], 
+            min_shape=[opt.min_v, 32, 4], 
+            opt_shape=[opt.opt_v, 32, 4], 
+            max_shape=[opt.max_v, 32, 4], 
             dtype=torch.float32, name="voxel_features"
         ),
         torch_tensorrt.Input(
-            min_shape=[min_v, 4], 
-            opt_shape=[opt_v, 4], 
-            max_shape=[max_v, 4], 
+            min_shape=[opt.min_v, 4], 
+            opt_shape=[opt.opt_v, 4], 
+            max_shape=[opt.max_v, 4], 
             dtype=torch.float32, name="voxel_coords"
         ),
         torch_tensorrt.Input(
-            min_shape=[min_v], 
-            opt_shape=[opt_v], 
-            max_shape=[max_v], 
+            min_shape=[opt.min_v], 
+            opt_shape=[opt.opt_v], 
+            max_shape=[opt.max_v], 
             dtype=torch.int32, name="voxel_num_points"
         ),
         torch_tensorrt.Input(shape=[1], dtype=torch.int32, name="record_len"),
-        torch_tensorrt.Input(shape=[1, 7, 4, 4], dtype=torch.float32, name="spatial_correction_matrix"),
-        torch_tensorrt.Input(shape=[1, 7, 3],    dtype=torch.float32, name="prior_encoding"),
+        torch_tensorrt.Input(shape=[1, max_cavs, 4, 4], dtype=torch.float32, name="spatial_correction_matrix"),
+        torch_tensorrt.Input(shape=[1, max_cavs, 3],    dtype=torch.float32, name="prior_encoding"),
     ]
 
     return inputs, trt_inputs
@@ -111,7 +120,7 @@ def main(opt=None):
     torch.manual_seed(0)
 
     model, hypes, opt = load_model(opt)
-    inputs, trt_inputs = build_inputs(hypes)
+    inputs, trt_inputs = build_inputs(hypes, opt)
 
     print("Tracing model to TorchScript")
     traced_model = torch.jit.trace(model, inputs)

@@ -9,8 +9,6 @@ from opencood.models.sub_modules.downsample_conv import DownsampleConv
 from opencood.models.sub_modules.naive_compress import NaiveCompressor
 from opencood.models.fuse_modules.v2xvit_basic import V2XTransformer
 
-from typing import List
-
 
 class PointPillarTransformer(nn.Module):
     def __init__(self, args):
@@ -76,7 +74,7 @@ class PointPillarTransformer(nn.Module):
                 spatial_correction_matrix, prior_encoding):
 
         # B, max_cav, 3(dt dv infra), 1, 1
-        prior_encoding =prior_encoding.unsqueeze(-1).unsqueeze(-1)
+        prior_encoding = prior_encoding.unsqueeze(-1).unsqueeze(-1)
 
         # n, 4 -> n, c
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)

@@ -209,7 +209,8 @@ def main():
 
     eval_utils.eval_final_results(result_stat,
                                   opt.model_dir,
-                                  opt.global_sort_detections)
+                                  opt.global_sort_detections,
+                                  hypes['validate_dir'])
     if opt.show_sequence:
         vis.destroy_window()
 

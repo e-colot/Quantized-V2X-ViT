@@ -152,7 +152,9 @@ def calculate_ap(result_stat, iou, global_sort_detections):
     return ap, mrec, mprec
 
 
-def eval_final_results(result_stat, save_path, global_sort_detections):
+def eval_final_results(result_stat, save_path, global_sort_detections, validate_dir):
+    # analyse whether test or validate set is used:
+    used_dataset = validate_dir.split('/')[-1]
     dump_dict = {}
 
     ap_30, mrec_30, mpre_30 = calculate_ap(result_stat, 0.30, global_sort_detections)
@@ -178,6 +180,7 @@ def eval_final_results(result_stat, save_path, global_sort_detections):
     if os.path.exists(baseline_path):
         try:
             baseline_eval = yaml_utils.load_yaml(baseline_path)
+            baseline_eval = baseline_eval.get(used_dataset)
 
             baseline_values = {
                 'ap30': baseline_eval.get('ap30'),
