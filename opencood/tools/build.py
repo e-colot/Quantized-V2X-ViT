@@ -32,8 +32,11 @@ class Arguments:
         elif modelName == "ppif":
             self.model_dir = 'opencood/logs/pointPillarIntermediateFusion'
 
-def load_model():
-    modelName = parser()
+def load_model(opt=None):
+    if opt is not None:
+        modelName = opt
+    else:
+        modelName = parser()
     valid_model_names = {
         "v2xvit",
         "ppif" # point pillar intermediate fusion
@@ -104,10 +107,10 @@ def build_inputs(hypes):
 
     return inputs, trt_inputs
 
-def main():
+def main(opt=None):
     torch.manual_seed(0)
 
-    model, hypes, opt = load_model()
+    model, hypes, opt = load_model(opt)
     inputs, trt_inputs = build_inputs(hypes)
 
     print("Tracing model to TorchScript")

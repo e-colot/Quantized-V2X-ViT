@@ -6,14 +6,6 @@ from opencood.models.fuse_modules.self_attn import AttFusion
 from opencood.models.sub_modules.auto_encoder import AutoEncoder
 
 
-class EmptyLayer(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        return x
-
-
 class AttBEVBackbone(nn.Module):
     def __init__(self, model_cfg, input_channels):
         super().__init__()
@@ -71,7 +63,7 @@ class AttBEVBackbone(nn.Module):
                 self.compression_modules.append(AutoEncoder(num_filters[idx],
                                                             self.compress_layer-idx))
             else:
-                self.compression_modules.append(EmptyLayer())
+                self.compression_modules.append(nn.Identity())
 
             for _ in range(layer_nums[idx]):
                 cur_layers.extend([
@@ -87,46 +79,43 @@ class AttBEVBackbone(nn.Module):
                 if stride >= 1:
                     self.deblocks.append(nn.Sequential(
                         nn.ConvTranspose2d(
-                            num_filters[idx], num_upsample_filters[idx],
-                            upsample_strides[idx],
-                            stride=upsample_strides[idx], bias=False
+                            in_channels=num_filters[idx], 
+                            out_channels=num_upsample_filters[idx],
+                            kernel_size=upsample_strides[idx],
+                            stride=upsample_strides[idx], 
+                            bias=False,
+                            output_padding=0
                         ),
                         nn.BatchNorm2d(num_upsample_filters[idx],
                                        eps=1e-3, momentum=0.01),
                         nn.ReLU()
                     ))
                 else:
-                    stride = np.round(1 / stride).astype(np.int)
+                    stride = int(np.round(1 / stride))
                     self.deblocks.append(nn.Sequential(
                         nn.Conv2d(
                             num_filters[idx], num_upsample_filters[idx],
-                            stride,
-                            stride=stride, bias=False
+                            kernel_size=stride,
+                            stride=stride, 
+                            bias=False,
+                            output_padding=0
                         ),
                         nn.BatchNorm2d(num_upsample_filters[idx], eps=1e-3,
                                        momentum=0.01),
                         nn.ReLU()
                     ))
             else:
-                self.deblocks.append(EmptyLayer())
+                self.deblocks.append(nn.Identity())
 
-        c_in = sum(num_upsample_filters)
-        if len(upsample_strides) > num_levels:
-            self.deblocks.append(nn.Sequential(
-                nn.ConvTranspose2d(c_in, c_in, upsample_strides[-1],
-                                   stride=upsample_strides[-1], bias=False),
-                nn.BatchNorm2d(c_in, eps=1e-3, momentum=0.01),
-                nn.ReLU(),
-            ))
+        self.upsample_stride_len = len(upsample_strides)
+        self.num_bev_features = sum(num_upsample_filters)
 
-        self.num_bev_features = c_in
-
-        self.extra_deblock = EmptyLayer()
-        if len(upsample_strides) > num_levels:
-            c_in = sum(num_upsample_filters)
+        self.extra_deblock = nn.Identity()
+        if self.upsample_stride_len > num_levels:
             self.extra_deblock = nn.Sequential(
-                nn.ConvTranspose2d(c_in, c_in, upsample_strides[-1], stride=upsample_strides[-1], bias=False),
-                nn.BatchNorm2d(c_in, eps=1e-3, momentum=0.01),
+                nn.ConvTranspose2d(self.num_bev_features, self.num_bev_features, upsample_strides[-1], 
+                                        stride=upsample_strides[-1], bias=False),
+                nn.BatchNorm2d(self.num_bev_features, eps=1e-3, momentum=0.01),
                 nn.ReLU(),
             )
 
@@ -139,13 +128,15 @@ class AttBEVBackbone(nn.Module):
             self.blocks, self.compression_modules, self.fuse_modules, self.deblocks):
             x = block(x)
             x = compression_module(x)
-            x_fuse = fuse_module(x, record_len)
+            x = fuse_module(x, record_len)
 
-            ups.append(deblock(x_fuse))
+            ups.append(deblock(x))
 
-        if len(ups) > 1:
+        if self.upsample_stride_len > 1:
             x = torch.cat(ups, dim=1)
-        elif len(ups) == 1:
+        else:
             x = ups[0]
 
-        return self.extra_deblock(x)
+        x = self.extra_deblock(x)
+
+        return x

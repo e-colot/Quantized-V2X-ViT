@@ -40,6 +40,7 @@ class PointPillarIntermediate(nn.Module):
         record_len_int = int(record_len[0].item()) # should be seen as a constant during trace pass
 
         spatial_features_2d = self.backbone(batch_spatial_features, record_len_int)
+        return spatial_features_2d
 
         psm = self.cls_head(spatial_features_2d)
         rm = self.reg_head(spatial_features_2d)
