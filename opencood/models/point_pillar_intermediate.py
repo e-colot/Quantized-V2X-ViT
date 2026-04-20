@@ -28,18 +28,21 @@ class PointPillarIntermediate(nn.Module):
                                   kernel_size=1)
         self.reg_head = nn.Conv2d(128 * 3, 7 * args['anchor_num'],
                                   kernel_size=1)
+        
+        self.max_cav = args['max_cav']
 
     def forward(self, voxel_features, voxel_coords, voxel_num_points, record_len, 
                 spatial_correction_matrix, prior_encoding):
 
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
         batch_spatial_features = self.scatter(voxel_coords, pillar_features)
-        spatial_features_2d = self.backbone(batch_spatial_features, record_len)
+
+        record_len_int = int(record_len[0].item()) # should be seen as a constant during trace pass
+
+        spatial_features_2d = self.backbone(batch_spatial_features, record_len_int)
 
         psm = self.cls_head(spatial_features_2d)
         rm = self.reg_head(spatial_features_2d)
 
-        output_dict = {'psm': psm,
-                       'rm': rm}
-
-        return output_dict
+        return psm, rm
+    

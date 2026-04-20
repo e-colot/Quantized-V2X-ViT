@@ -210,7 +210,7 @@ def main():
 
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False)
-    print(f'{len(opencood_dataset)} samples found.')
+    print(f'{len(opencood_dataset)} samples found')
 
     data_loader = DataLoader(
         opencood_dataset,

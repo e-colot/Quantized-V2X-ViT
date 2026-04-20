@@ -17,7 +17,6 @@ from opencood.tools import train_utils, inference_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils
 from opencood.visualization import vis_utils
-import matplotlib.pyplot as plt
 
 
 def parser():
@@ -37,8 +36,8 @@ class Arguments:
         self.global_sort_detections = False
         self.fusion_method = 'intermediate'
         if modelName == "v2xvit":
-            self.model_dir = 'opencood/v2x-vit'
-        elif modelName == "intermediateFusion":
+            self.model_dir = 'opencood/logs/v2x-vit'
+        elif modelName == "ppif":
             self.model_dir = 'opencood/logs/pointPillarIntermediateFusion'
 
 def main():
@@ -62,7 +61,7 @@ def main():
 
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False)
-    print(f"{len(opencood_dataset)} samples found.")
+    print(f"{len(opencood_dataset)} samples found")
     data_loader = DataLoader(opencood_dataset,
                              batch_size=1,
                              num_workers=16,

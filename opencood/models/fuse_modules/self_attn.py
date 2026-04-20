@@ -1,8 +1,3 @@
-# -*- coding: utf-8 -*-
-# Author: Hao Xiang <haxiang@g.ucla.edu>, Runsheng Xu <rxx3386@ucla.edu>
-# License: TDG-Attribution-NonCommercial-NoDistrib
-
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,57 +5,45 @@ import torch.nn.functional as F
 
 
 class ScaledDotProductAttention(nn.Module):
-    """
-    Scaled Dot-Product Attention proposed in "Attention Is All You Need"
-    Compute the dot products of the query with all keys, divide each by sqrt(dim),
-    and apply a softmax function to obtain the weights on the values
-    Args: dim, mask
-        dim (int): dimention of attention
-        mask (torch.Tensor): tensor containing indices to be masked
-    Inputs: query, key, value, mask
-        - **query** (batch, q_len, d_model): tensor containing projection
-          vector for decoder.
-        - **key** (batch, k_len, d_model): tensor containing projection
-          vector for encoder.
-        - **value** (batch, v_len, d_model): tensor containing features of the
-          encoded input sequence.
-        - **mask** (-): tensor containing indices to be masked
-    Returns: context, attn
-        - **context**: tensor containing the context vector from
-          attention mechanism.
-        - **attn**: tensor containing the attention (alignment) from the
-          encoder outputs.
-    """
-
     def __init__(self, dim):
-        super(ScaledDotProductAttention, self).__init__()
+        super().__init__()
         self.sqrt_dim = np.sqrt(dim)
 
-    def forward(self, query, key, value):
+    def forward(self, query, key, value, mask=None):
         score = torch.bmm(query, key.transpose(1, 2)) / self.sqrt_dim
-        attn = F.softmax(score, -1)
+        if mask is not None:
+            score = score.masked_fill(mask, float('-inf'))
+        attn = F.softmax(score, dim=-1)
+        attn = torch.nan_to_num(attn, nan=0.0)
         context = torch.bmm(attn, value)
         return context
 
 
 class AttFusion(nn.Module):
     def __init__(self, feature_dim):
-        super(AttFusion, self).__init__()
+        super().__init__()
         self.att = ScaledDotProductAttention(feature_dim)
 
     def forward(self, x, record_len):
-        split_x = self.regroup(x, record_len)
-        C, W, H = split_x[0].shape[1:]
-        out = []
-        for xx in split_x:
-            cav_num = xx.shape[0]
-            xx = xx.view(cav_num, C, -1).permute(2, 0, 1)
-            h = self.att(xx, xx, xx)
-            h = h.permute(1, 2, 0).view(cav_num, C, W, H)[0, ...]
-            out.append(h)
-        return torch.stack(out)
+        """
+        x          : [max_cav, C, H, W]
+        record_len : int (Python), number of valid CAVs
+        Returns    : [1, C, H, W]
+        """
+        max_cav, C, H, W = x.shape
 
-    def regroup(self, x, record_len):
-        cum_sum_len = torch.cumsum(record_len, dim=0)
-        split_x = torch.tensor_split(x, cum_sum_len[:-1].cpu())
-        return split_x
+        tokens = x.view(max_cav, C, -1).permute(2, 0, 1)  # [H*W, max_cav, C]
+
+        # Functional mask — no in-place ops, TRT-safe
+        # pad_mask[b, 0, i] = True means slot i is padding (ignore it)
+        indices = torch.arange(max_cav, device=x.device)   # [max_cav]
+        pad_mask = (indices >= record_len)                  # [max_cav], True=padding
+        pad_mask = pad_mask.unsqueeze(0).unsqueeze(0)       # [1, 1, max_cav]
+        pad_mask = pad_mask.expand(H * W, 1, max_cav)      # [H*W, 1, max_cav]
+
+        h = self.att(tokens, tokens, tokens, mask=pad_mask) # [H*W, max_cav, C]
+
+        ego = h[:, 0, :]                         # [H*W, C]
+        ego = ego.permute(1, 0).view(C, H, W)   # [C, H, W]
+        return ego.unsqueeze(0)                  # [1, C, H, W]
+    

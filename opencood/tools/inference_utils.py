@@ -71,8 +71,11 @@ def inference_early_fusion(batch_data, model, dataset):
     voxel_coords = processed_lidar['voxel_coords'].to(torch.int32)
     voxel_num_points = processed_lidar['voxel_num_points'].to(torch.int32)
 
-    output_dict['ego'] = model(voxel_features, voxel_coords, voxel_num_points, record_len, 
+    psm, rm = model(voxel_features, voxel_coords, voxel_num_points, record_len, 
                 spatial_correction_matrix, prior_encoding)
+    
+    output_dict['ego'] = {'psm' : psm,
+                          'rm': rm}
 
     pred_box_tensor, pred_score, gt_box_tensor = \
         dataset.post_process(batch_data,

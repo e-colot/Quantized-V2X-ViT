@@ -110,7 +110,4 @@ class PointPillarTransformer(nn.Module):
         psm = self.cls_head(fused_feature)
         rm = self.reg_head(fused_feature)
 
-        output_dict = {'psm': psm,
-                       'rm': rm}
-
-        return output_dict
+        return psm, rm

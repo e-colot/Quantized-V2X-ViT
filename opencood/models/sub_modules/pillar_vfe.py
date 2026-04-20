@@ -43,7 +43,7 @@ class PFNLayer(nn.Module):
             C = x.shape[-1]
             x = x.view(-1, C)
             x = self.norm(x)
-            x = x.view(inputs.shape[0], inputs.shape[1], -1)
+            x = x.view(inputs.shape[0], inputs.shape[1], C)
 
         x = F.relu(x)
         x_max = trt_max(x)
@@ -51,7 +51,8 @@ class PFNLayer(nn.Module):
         if self.last_vfe:
             return x_max
         else:
-            x_repeat = x_max.expand(-1, inputs.shape[1], -1)
+            C = x.shape[-1] 
+            x_repeat = x_max.expand(-1, inputs.shape[1], C)
             x_concatenated = torch.cat([x, x_repeat], dim=2)
             return x_concatenated
 
@@ -97,10 +98,12 @@ class PillarVFE(nn.Module):
 
     @staticmethod
     def get_paddings_indicator(actual_num: torch.Tensor, max_num: int, axis: int = 0):
-        actual_num = torch.unsqueeze(actual_num, axis + 1)
-        max_num_shape = [-1 if i == (axis + 1) else 1 for i in range(len(actual_num.shape))]
-        max_num = torch.arange(max_num, dtype=torch.int32, device='cuda').view(max_num_shape)
-        paddings_indicator = actual_num.int() > max_num
+        # actual_num: [N]  →  unsqueeze to [N, 1]
+        actual_num = torch.unsqueeze(actual_num, axis + 1)   # [N, 1]
+        # arange: [max_num] → unsqueeze to [1, max_num]
+        # Explicit shape instead of view([1,-1]) which TRT rejects
+        max_num_t = torch.arange(max_num, dtype=torch.int32, device=actual_num.device).unsqueeze(0)  # [1, max_num]
+        paddings_indicator = actual_num.int() > max_num_t    # [N, max_num] broadcast
         return paddings_indicator
     
     def forward(self, voxel_features, voxel_coords, voxel_num_points):
@@ -109,16 +112,15 @@ class PillarVFE(nn.Module):
             voxel_features[:, :, :3].sum(dim=1, keepdim=True) / \
             voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
         f_cluster = voxel_features[:, :, :3] - points_mean
-
-        f_center = torch.zeros_like(voxel_features[:, :, :3])
-        f_center[:, :, 0] = voxel_features[:, :, 0] - (voxel_coords[:, 3].to(voxel_features.dtype)
-                                                       .unsqueeze(1) * self.voxel_x + self.x_offset)
         
-        f_center[:, :, 1] = voxel_features[:, :, 1] - (voxel_coords[:, 2].to(voxel_features.dtype)
-                                                       .unsqueeze(1) * self.voxel_y + self.y_offset)
+        row0 = voxel_features[:, :, 0] - (voxel_coords[:, 3].to(voxel_features.dtype)
+                                          .unsqueeze(1) * self.voxel_x + self.x_offset)
+        row1 = voxel_features[:, :, 1] - (voxel_coords[:, 2].to(voxel_features.dtype)
+                                          .unsqueeze(1) * self.voxel_y + self.y_offset)
+        row2 = voxel_features[:, :, 2] - (voxel_coords[:, 1].to(voxel_features.dtype)
+                                          .unsqueeze(1) * self.voxel_z + self.z_offset)
         
-        f_center[:, :, 2] = voxel_features[:, :, 2] - (voxel_coords[:, 1].to(voxel_features.dtype)
-                                                       .unsqueeze(1) * self.voxel_z + self.z_offset)
+        f_center = torch.stack((row0, row1, row2), dim=2)
 
         if self.use_absolute_xyz:
             features = [voxel_features, f_cluster, f_center]
