@@ -29,12 +29,8 @@ class PointPillarIntermediate(nn.Module):
         self.reg_head = nn.Conv2d(128 * 3, 7 * args['anchor_num'],
                                   kernel_size=1)
 
-    def forward(self, data_dict):
-
-        voxel_features = data_dict['processed_lidar']['voxel_features']
-        voxel_coords = data_dict['processed_lidar']['voxel_coords']
-        voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
-        record_len = data_dict['record_len']
+    def forward(self, voxel_features, voxel_coords, voxel_num_points, record_len, 
+                spatial_correction_matrix, prior_encoding):
 
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
         batch_spatial_features = self.scatter(voxel_coords, pillar_features)

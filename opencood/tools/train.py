@@ -145,6 +145,17 @@ def main():
 
             batch_data = train_utils.to_device(batch_data, device)
 
+            cav_content = batch_data['ego']
+    
+            record_len = cav_content['record_len'].to(torch.int32)
+            prior_encoding = cav_content['prior_encoding'].to(torch.float32)
+            spatial_correction_matrix = cav_content['spatial_correction_matrix'].to(torch.float32)
+
+            processed_lidar = cav_content['processed_lidar']
+            voxel_features = processed_lidar['voxel_features'].to(torch.float32)
+            voxel_coords = processed_lidar['voxel_coords'].to(torch.int32)
+            voxel_num_points = processed_lidar['voxel_num_points'].to(torch.int32)
+
             # case1 : late fusion train --> only ego needed,
             # and ego is random selected
             # case2 : early fusion train --> all data projected to ego
@@ -152,14 +163,16 @@ def main():
             # becomes a list, which containing all data from other cavs
             # as well
             if not opt.half:
-                ouput_dict = model(batch_data['ego'])
+                ouput_dict = model(voxel_features, voxel_coords, voxel_num_points, record_len, 
+                                    spatial_correction_matrix, prior_encoding)
                 # first argument is always your output dictionary,
                 # second argument is always your label dictionary.
                 final_loss = criterion(ouput_dict,
                                        batch_data['ego']['label_dict'])
             else:
                 with torch.cuda.amp.autocast():
-                    ouput_dict = model(batch_data['ego'])
+                    ouput_dict = model(voxel_features, voxel_coords, voxel_num_points, record_len, 
+                                        spatial_correction_matrix, prior_encoding)
                     final_loss = criterion(ouput_dict,
                                            batch_data['ego']['label_dict'])
 
@@ -190,9 +203,22 @@ def main():
                     model.eval()
 
                     batch_data = train_utils.to_device(batch_data, device)
-                    ouput_dict = model(batch_data['ego'])
 
-                    final_loss = criterion(ouput_dict,
+                    cav_content = batch_data['ego']
+    
+                    record_len = cav_content['record_len'].to(torch.int32)
+                    prior_encoding = cav_content['prior_encoding'].to(torch.float32)
+                    spatial_correction_matrix = cav_content['spatial_correction_matrix'].to(torch.float32)
+
+                    processed_lidar = cav_content['processed_lidar']
+                    voxel_features = processed_lidar['voxel_features'].to(torch.float32)
+                    voxel_coords = processed_lidar['voxel_coords'].to(torch.int32)
+                    voxel_num_points = processed_lidar['voxel_num_points'].to(torch.int32)
+
+                    output_dict = model(voxel_features, voxel_coords, voxel_num_points, record_len, 
+                            spatial_correction_matrix, prior_encoding)
+
+                    final_loss = criterion(output_dict,
                                            batch_data['ego']['label_dict'])
                     valid_ave_loss.append(final_loss.item())
             valid_ave_loss = statistics.mean(valid_ave_loss)

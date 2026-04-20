@@ -20,44 +20,39 @@ from opencood.visualization import vis_utils
 import matplotlib.pyplot as plt
 
 
-def test_parser():
-    parser = argparse.ArgumentParser(description="synthetic data generation")
-    parser.add_argument('--model_dir', type=str,
-                        help='Continued training path')
-    parser.add_argument('--fusion_method', type=str,
-                        default='late',
-                        help='late, early or intermediate')
-    parser.add_argument('--show_vis', action='store_true',
-                        help='whether to show image visualization result')
-    parser.add_argument('--show_sequence', action='store_true',
-                        help='whether to show video visualization result.'
-                             'it can note be set true with show_vis together ')
-    parser.add_argument('--save_vis', action='store_true',
-                        help='whether to save visualization result')
-    parser.add_argument('--save_npy', action='store_true',
-                        help='whether to save prediction and gt result'
-                             'in npy_test file')
-    parser.add_argument('--global_sort_detections', action='store_true',
-                        help='whether to globally sort detections by confidence score.'
-                             'If set to True, it is the mainstream AP computing method,'
-                             'but would increase the tolerance for FP (False Positives).')
+def parser():
+    parser = argparse.ArgumentParser(description="Model selector")
+    parser.add_argument('--model', type=str,
+                        required=True)
     opt = parser.parse_args()
-    return opt if opt.model_dir else Arguments()
+    return str(opt.model)
 
 class Arguments:
-    def __init__(self):
+    def __init__(self, modelName):
         print('Default parameters used')
-        self.model_dir = 'opencood/v2x-vit'
-        self.fusion_method = 'intermediate'
         self.show_vis = False
         self.show_sequence = False
         self.save_vis = False
         self.save_npy = False
         self.global_sort_detections = False
+        self.fusion_method = 'intermediate'
+        if modelName == "v2xvit":
+            self.model_dir = 'opencood/v2x-vit'
+        elif modelName == "intermediateFusion":
+            self.model_dir = 'opencood/logs/pointPillarIntermediateFusion'
 
 def main():
-    # opt = test_parser()
-    opt = Arguments()
+    modelName = parser()
+    valid_model_names = {
+        "v2xvit",
+        "ppif" # point pillar intermediate fusion
+    }
+
+    if modelName not in valid_model_names:
+        raise ValueError(f"Invalid TRT_STAGE={modelName}. Use one of {sorted(valid_model_names)}")
+    
+    opt = Arguments(modelName)
+
     assert opt.fusion_method in ['late', 'early', 'intermediate']
     assert not (opt.show_vis and opt.show_sequence), 'you can only visualize ' \
                                                     'the results in single ' \
