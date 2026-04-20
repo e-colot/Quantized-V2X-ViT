@@ -37,10 +37,10 @@ class PointPillarIntermediate(nn.Module):
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
         batch_spatial_features = self.scatter(voxel_coords, pillar_features)
 
-        record_len_int = int(record_len[0].item()) # should be seen as a constant during trace pass
-
-        spatial_features_2d = self.backbone(batch_spatial_features, record_len_int)
-        return spatial_features_2d
+        # Keep record_len as a tensor so tracing/TensorRT does not bake in
+        # a Python constant CAV count.
+        spatial_features_2d = self.backbone(batch_spatial_features, record_len)
+        #return spatial_features_2d
 
         psm = self.cls_head(spatial_features_2d)
         rm = self.reg_head(spatial_features_2d)
