@@ -22,7 +22,7 @@ class PointPillarScatter(nn.Module):
         if voxel_coords.numel() == 0:
             raise ValueError('PointPillarScatter received an empty voxel_coords tensor.')
 
-        indices = (voxel_coords[:, 0] * self.num_pixels + voxel_coords[:, 2] * self.nx + voxel_coords[:, 3])
+        indices = (voxel_coords[:, 0] * self.num_pixels + voxel_coords[:, 2] * self.nx + voxel_coords[:, 3]).to(torch.int32)
 
         # if indices.min().item() < 0 or indices.max().item() >= batch_size * self.num_pixels:
         #     raise ValueError(

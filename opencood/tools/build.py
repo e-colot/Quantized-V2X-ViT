@@ -72,8 +72,8 @@ def build_inputs(hypes):
     inputs = (
         torch.randn((opt_v, 32, 4), dtype=torch.float32).to(device),      # voxel_features
         torch.zeros((opt_v, 4), dtype=torch.int32).to(device),            # voxel_coords
-        torch.zeros((opt_v,), dtype=torch.int32).to(device),              # voxel_num_points
-        torch.ones((opt_cavs,), dtype=torch.int32).to(device),                   # record_len
+        torch.zeros((opt_v,), dtype=torch.float32).to(device),              # voxel_num_points
+        torch.ones((1,), dtype=torch.int32).to(device),            # record_len
         torch.randn((1, 7, 4, 4), dtype=torch.float32).to(device),        # spatial_correction_matrix
         torch.randn((1, 7, 3), dtype=torch.float32).to(device)            # prior_encoding
     )
@@ -89,7 +89,7 @@ def build_inputs(hypes):
             min_shape=[min_v, 4], 
             opt_shape=[opt_v, 4], 
             max_shape=[max_v, 4], 
-            dtype=torch.int32, name="voxel_coords"
+            dtype=torch.float32, name="voxel_coords"
         ),
         torch_tensorrt.Input(
             min_shape=[min_v], 
@@ -116,10 +116,12 @@ def main():
     print("Compiling with TorchScript backend")
     trt_model = torch_tensorrt.compile(
         traced_model,
-        inputs=trt_inputs, # trt_inputs still defines your min/opt/max ranges
+        inputs=trt_inputs, # trt_inputs still defines min/opt/max ranges
         enabled_precisions={torch.float32},
         truncate_long_and_double=True,
+        require_full_compilation=True,
         workspace_size=1 << 30,
+        allow_shape_tensors=True,
         ir='torchscript'
     )
 

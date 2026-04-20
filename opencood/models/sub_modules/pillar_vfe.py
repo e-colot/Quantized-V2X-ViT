@@ -103,7 +103,7 @@ class PillarVFE(nn.Module):
         # arange: [max_num] → unsqueeze to [1, max_num]
         # Explicit shape instead of view([1,-1]) which TRT rejects
         max_num_t = torch.arange(max_num, dtype=torch.int32, device=actual_num.device).unsqueeze(0)  # [1, max_num]
-        paddings_indicator = actual_num.int() > max_num_t    # [N, max_num] broadcast
+        paddings_indicator = actual_num.to(torch.int32) > max_num_t    # [N, max_num] broadcast
         return paddings_indicator
     
     def forward(self, voxel_features, voxel_coords, voxel_num_points):
@@ -112,13 +112,12 @@ class PillarVFE(nn.Module):
             voxel_features[:, :, :3].sum(dim=1, keepdim=True) / \
             voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
         f_cluster = voxel_features[:, :, :3] - points_mean
+
+        voxel_coords = voxel_coords.to(voxel_features.dtype)
         
-        row0 = voxel_features[:, :, 0] - (voxel_coords[:, 3].to(voxel_features.dtype)
-                                          .unsqueeze(1) * self.voxel_x + self.x_offset)
-        row1 = voxel_features[:, :, 1] - (voxel_coords[:, 2].to(voxel_features.dtype)
-                                          .unsqueeze(1) * self.voxel_y + self.y_offset)
-        row2 = voxel_features[:, :, 2] - (voxel_coords[:, 1].to(voxel_features.dtype)
-                                          .unsqueeze(1) * self.voxel_z + self.z_offset)
+        row0 = voxel_features[:, :, 0] - (voxel_coords[:, 3].unsqueeze(1) * self.voxel_x + self.x_offset)
+        row1 = voxel_features[:, :, 1] - (voxel_coords[:, 2].unsqueeze(1) * self.voxel_y + self.y_offset)
+        row2 = voxel_features[:, :, 2] - (voxel_coords[:, 1].unsqueeze(1) * self.voxel_z + self.z_offset)
         
         f_center = torch.stack((row0, row1, row2), dim=2)
 
