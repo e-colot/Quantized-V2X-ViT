@@ -82,12 +82,12 @@ def build_inputs(hypes, opt):
     device = 'cuda'
 
     inputs = (
-        torch.randn((opt.opt_v, 32, 4), dtype=torch.float32).to(device),      # voxel_features
-        torch.zeros((opt.opt_v, 4), dtype=torch.int32).to(device),            # voxel_coords
+        torch.randn((opt.opt_v, 32, 4), dtype=torch.float32).to(device),        # voxel_features
+        torch.zeros((opt.opt_v, 4), dtype=torch.float32).to(device),            # voxel_coords
         torch.zeros((opt.opt_v,), dtype=torch.float32).to(device),              # voxel_num_points
-        torch.ones((1,), dtype=torch.int32).to(device),            # record_len
-        torch.randn((1, max_cavs, 4, 4), dtype=torch.float32).to(device),        # spatial_correction_matrix
-        torch.randn((1, max_cavs, 3), dtype=torch.float32).to(device)            # prior_encoding
+        torch.ones((1,), dtype=torch.int32).to(device),                         # record_len
+        torch.randn((1, max_cavs, 4, 4), dtype=torch.float32).to(device),       # spatial_correction_matrix
+        torch.randn((1, max_cavs, 3), dtype=torch.float32).to(device)           # prior_encoding
     )
 
     trt_inputs = [
@@ -107,7 +107,7 @@ def build_inputs(hypes, opt):
             min_shape=[opt.min_v], 
             opt_shape=[opt.opt_v], 
             max_shape=[opt.max_v], 
-            dtype=torch.int32, name="voxel_num_points"
+            dtype=torch.float32, name="voxel_num_points"
         ),
         torch_tensorrt.Input(shape=[1], dtype=torch.int32, name="record_len"),
         torch_tensorrt.Input(shape=[1, max_cavs, 4, 4], dtype=torch.float32, name="spatial_correction_matrix"),
@@ -122,10 +122,17 @@ def main(opt=None):
     model, hypes, opt = load_model(opt)
     inputs, trt_inputs = build_inputs(hypes, opt)
 
+    print(f"\n{'='*15} BUILDING TRT ENGINE {'='*15}\n")
     print("Tracing model to TorchScript")
     traced_model = torch.jit.trace(model, inputs)
+    traced_path = os.path.join(opt.model_dir, "TS_graph.log")
+    with open(traced_path, "w") as f:
+        f.write(str(traced_model.graph))
+        print(f"Saved TorchScript graph to {traced_path}")
 
-    print("Compiling with TorchScript backend")
+    print(f"\n{'-'*63}\n")
+
+    print("Compiling TorchScript traced model to TensorRT engine")
     trt_model = torch_tensorrt.compile(
         traced_model,
         inputs=trt_inputs, # trt_inputs still defines min/opt/max ranges
@@ -136,8 +143,14 @@ def main(opt=None):
         allow_shape_tensors=True,
         ir='torchscript'
     )
+    trt_graph_path = os.path.join(opt.model_dir, "TRT_graph.log")
+    with open(trt_graph_path, "w") as f:
+        f.write(str(trt_model.graph))
+        print(f"Saved TensorRT engine graph to {trt_graph_path}")
 
-    print('Engine successfully built')
+    print(f"\n{'-'*63}")
+
+    print(f"\n{'='*15} ENGINE SUCCESSFULLY BUILT {'='*15}")
 
     save_path = os.path.join(opt.model_dir, "trt.pt")
     torch.jit.save(trt_model, save_path)

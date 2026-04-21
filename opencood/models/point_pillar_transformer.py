@@ -15,7 +15,6 @@ class PointPillarTransformer(nn.Module):
         super(PointPillarTransformer, self).__init__()
 
         self.max_cav = args['max_cav']
-        # PIllar VFE
         self.pillar_vfe = PillarVFE(args['pillar_vfe'],
                                     num_point_features=4,
                                     voxel_size=args['voxel_size'],
@@ -80,6 +79,7 @@ class PointPillarTransformer(nn.Module):
         # n, 4 -> n, c
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
         # Relative L2 summary: mean=2.909690e-04, median=2.876608e-04, max=3.430791e-04
+        return pillar_features
 
         # n, c -> N, C, H, W
         spatial_features = self.scatter(voxel_coords, pillar_features)

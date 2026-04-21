@@ -135,21 +135,18 @@ def main():
                         unit='batch',
                         dynamic_ncols=True)
     for i, batch_data in enumerate(progress_bar):
-        # print(i)
         with torch.no_grad():
             batch_data = train_utils.to_device(batch_data, device)
             
             cav_content = batch_data['ego']
-            
-
-            record_len = cav_content['record_len'].to(torch.int32)
-            prior_encoding = cav_content['prior_encoding'].to(torch.float32)
-            spatial_correction_matrix = cav_content['spatial_correction_matrix'].to(torch.float32)
-
             processed_lidar = cav_content['processed_lidar']
+
             voxel_features = processed_lidar['voxel_features'].to(torch.float32)
             voxel_coords = processed_lidar['voxel_coords'].to(torch.float32)
-            voxel_num_points = processed_lidar['voxel_num_points'].to(torch.int32)
+            voxel_num_points = processed_lidar['voxel_num_points'].to(torch.float32)
+            record_len = cav_content['record_len'].to(torch.int32)
+            spatial_correction_matrix = cav_content['spatial_correction_matrix'].to(torch.float32)
+            prior_encoding = cav_content['prior_encoding'].to(torch.float32)
 
             torchOutput = model(voxel_features, voxel_coords, voxel_num_points, record_len, 
                         spatial_correction_matrix, prior_encoding)

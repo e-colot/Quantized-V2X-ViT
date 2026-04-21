@@ -36,11 +36,11 @@ class PFNLayer(nn.Module):
     def forward(self, inputs):
 
         x = self.linear(inputs)
+        C = x.shape[-1]
 
         if self.use_norm:
             # Reshape to (N*L, C) to use BatchNorm1d effectively
             # TensorRT handles 2D BatchNorm much better
-            C = x.shape[-1]
             x = x.view(-1, C)
             x = self.norm(x)
             x = x.view(inputs.shape[0], inputs.shape[1], C)
@@ -51,7 +51,6 @@ class PFNLayer(nn.Module):
         if self.last_vfe:
             return x_max
         else:
-            C = x.shape[-1] 
             x_repeat = x_max.expand(-1, inputs.shape[1], C)
             x_concatenated = torch.cat([x, x_repeat], dim=2)
             return x_concatenated
@@ -121,22 +120,20 @@ class PillarVFE(nn.Module):
         
         f_center = torch.stack((row0, row1, row2), dim=2)
 
-        if self.use_absolute_xyz:
-            features = [voxel_features, f_cluster, f_center]
-        else:
-            features = [voxel_features[..., 3:], f_cluster, f_center]
+        kept_features = voxel_features if self.use_absolute_xyz else voxel_features[:, :, 3:]
 
         if self.with_distance:
-            points_dist = torch.norm(voxel_features[:, :, :3], 2, 2,
-                                     keepdim=True)
-            features.append(points_dist)
-        features = torch.cat(features, dim=-1)
+            points_dist = torch.norm(voxel_features[:, :, :3], 2, 2, keepdim=True)
+            features = torch.cat((kept_features, f_cluster, f_center, points_dist), dim=-1)
+        else:
+            features = torch.cat((kept_features, f_cluster, f_center), dim=-1)
 
         voxel_count = features.shape[1]
         mask = self.get_paddings_indicator(voxel_num_points, voxel_count,
                                            axis=0)
         mask = torch.unsqueeze(mask, -1).type_as(voxel_features)
         features *= mask
+    
         for pfn in self.pfn_layers:
             features = pfn(features)
         features = features.squeeze(1)
