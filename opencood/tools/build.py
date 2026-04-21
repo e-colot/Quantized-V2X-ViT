@@ -122,7 +122,7 @@ def main(opt=None):
     model, hypes, opt = load_model(opt)
     inputs, trt_inputs = build_inputs(hypes, opt)
 
-    print(f"\n{'='*15} BUILDING TRT ENGINE {'='*15}\n")
+    print(f"{'='*15} BUILDING TRT ENGINE {'='*15}")
     print("Tracing model to TorchScript")
     traced_model = torch.jit.trace(model, inputs)
     traced_path = os.path.join(opt.model_dir, "TS_graph.log")
@@ -130,7 +130,7 @@ def main(opt=None):
         f.write(str(traced_model.graph))
         print(f"Saved TorchScript graph to {traced_path}")
 
-    print(f"\n{'-'*63}\n")
+    print(f"{'-'*63}\n")
 
     print("Compiling TorchScript traced model to TensorRT engine")
     trt_model = torch_tensorrt.compile(
@@ -147,8 +147,6 @@ def main(opt=None):
     with open(trt_graph_path, "w") as f:
         f.write(str(trt_model.graph))
         print(f"Saved TensorRT engine graph to {trt_graph_path}")
-
-    print(f"\n{'-'*63}")
 
     print(f"\n{'='*15} ENGINE SUCCESSFULLY BUILT {'='*15}")
 

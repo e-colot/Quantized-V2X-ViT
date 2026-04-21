@@ -94,14 +94,10 @@ class BaseBEVBackbone(nn.Module):
 
     def forward(self, spatial_features):
         ups = []
-        #ret_dict = {}
         x = spatial_features
 
         for block, deblock in zip(self.blocks, self.deblocks):
             x = block(x)
-
-            #stride = int(spatial_features.shape[2] / x.shape[2])
-            #ret_dict['spatial_features_%dx' % stride] = x
 
             if len(self.deblocks) > 0:
                 ups.append(deblock(x))
