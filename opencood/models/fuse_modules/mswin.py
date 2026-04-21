@@ -35,6 +35,7 @@ class BaseWindowAttention(nn.Module):
             stride = 2 * window_size - 1
             rel_coords = get_relative_distances(window_size) + window_size - 1
             indices_1d = rel_coords[:, :, 0] * stride + rel_coords[:, :, 1]
+            indices_1d = indices_1d.clamp(min=0)
             
             # Register the INDEX MAP as a buffer (TensorRT constant)
             self.register_buffer('rel_idx_1d', indices_1d.reshape(-1).to(torch.int32))
@@ -53,7 +54,7 @@ class BaseWindowAttention(nn.Module):
 
     def forward(self, x):
         # x shape: (b, l, h, w, c)
-        b, l, h, w, c = x.shape
+        b, l, h, w = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
         ws = self.window_size
 
         qkv = self.to_qkv(x)
@@ -181,7 +182,7 @@ class PyramidWindowAttention(nn.Module):
         window_outputs = torch.stack([wmsa(x) for wmsa in self.pwmsa], dim=0)
 
         if self.fuse_method == 'naive':
-            return torch.mean(window_outputs, dim=0)
+            return window_outputs.to(torch.float32).mean(dim=0)
 
         else:
             # self.fuse_method == 'split_attn'

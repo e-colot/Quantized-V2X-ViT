@@ -159,8 +159,8 @@ class V2XTEncoder(nn.Module):
         mlp_dim = feed_config['mlp_dim']
         dropout = feed_config['dropout']
 
-        self.downsample_rate = float(args['sttf']['downsample_rate'])
-        self.discrete_ratio = args['sttf']['voxel_size'][0]
+        self.downsample_rate = torch.tensor(args['sttf']['downsample_rate'], dtype=torch.float32, device='cuda')
+        self.discrete_ratio = torch.tensor(args['sttf']['voxel_size'][0], dtype=torch.float32, device='cuda')
         self.use_roi_mask = args['use_roi_mask']
         self.use_RTE = cav_att_config['use_RTE']
         self.RTE_ratio = cav_att_config['RTE_ratio']

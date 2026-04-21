@@ -140,10 +140,10 @@ def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: 
 
     matrix = matrix[:, :, idx1, :][:, :, :, idx2]
     # normalize the x,y transformation
-    matrix[:, :, :, -1] = matrix[:, :, :, -1] \
-                          / (discrete_ratio * downsample_rate)
-
-    return matrix.type(dtype=torch.float32)
+    scale = (discrete_ratio * downsample_rate).to(torch.float32)
+    matrix = matrix.to(torch.float32)
+    matrix[:, :, :, -1] = matrix[:, :, :, -1] / scale
+    return matrix
 
 def _3x3_cramer_inverse(input: torch.Tensor):
     r"""
@@ -183,7 +183,8 @@ def _3x3_cramer_inverse(input: torch.Tensor):
 
     adjugate = torch.stack([res_row1, res_row2, res_row3], dim=-2)
     
-    return adjugate / (det + 1e-12 * torch.sign(det)).unsqueeze(-1).unsqueeze(-1)
+    eps = torch.tensor(1e-12, dtype=input.dtype, device=input.device)
+    return adjugate / (det + eps * torch.sign(det)).unsqueeze(-1).unsqueeze(-1)
 
 
 def normal_transform_pixel(
@@ -520,8 +521,8 @@ def _affine_grid_sample_approx_bilinear_sample(
 
     # FIX 1: Use .size() and cast to Tensor immediately to stay in the graph
     # This prevents aten::item during the math operations below
-    H = torch.tensor(src.size(2), device=device, dtype=dtype)
-    W = torch.tensor(src.size(3), device=device, dtype=dtype)
+    H = torch.tensor(src.shape[2], device=device, dtype=dtype)
+    W = torch.tensor(src.shape[3], device=device, dtype=dtype)
     
     zero = torch.tensor(0.0, device=device, dtype=dtype)
     one = torch.tensor(1.0, device=device, dtype=dtype)

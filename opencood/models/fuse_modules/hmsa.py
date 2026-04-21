@@ -26,7 +26,7 @@ class HGTCavAttention(nn.Module):
         inner_dim = heads * dim_head
 
         self.heads = heads
-        self.scale = dim_head ** -0.5
+        self.register_buffer('scale', torch.tensor(dim_head ** -0.5, dtype=torch.float32, device='cuda'))
         self.num_types = num_types
 
         self.attend = nn.Softmax(dim=-1)
@@ -57,22 +57,23 @@ class HGTCavAttention(nn.Module):
     def apply_type_linear(self, x, types, weight, bias):
         """Vectorized linear projection based on types (B, L)"""
         # Flatten and gather weights for each token: (B*L, out_dim, in_dim)
-        flat_types = types.view(-1).to(torch.int32)
+        flat_types = types.view(-1).to(torch.int32).clamp(min=0)
         w = weight[flat_types] 
         b = bias[flat_types].unsqueeze(-1)
         
         # Reshape x for batch matrix multiplication
         # (B, H, W, L, C) -> (B, L, H, W, C) -> (B*L, H*W, C)
-        x_flat = x.permute(0, 3, 1, 2, 4).reshape(x.shape[0] * x.shape[3],
-                              x.shape[1] * x.shape[2],
-                              x.shape[4])
+        BL = int(x.shape[0]) * int(x.shape[3])
+        HW = int(x.shape[1]) * int(x.shape[2])
+        C  = int(x.shape[4])
+        x_flat = x.permute(0, 3, 1, 2, 4).reshape(BL, HW, C)
         
         # out = x @ W.T + b
         # (B*L, H*W, C) @ (B*L, C, out_C) -> (B*L, H*W, out_C)
         out = torch.bmm(x_flat, w.transpose(-1, -2)) + b.transpose(-1, -2)
 
         # (B*L, H*W, out_C) -> (B, L, H, W, out_C)
-        out = out.reshape(x.shape[0], x.shape[3], x.shape[1], x.shape[2], -1)
+        out = out.reshape(int(x.shape[0]), int(x.shape[3]), int(x.shape[1]), int(x.shape[2]), -1)
         # (B, L, H, W, out_C) -> (B, H, W, L, out_C)
         return out.permute(0, 2, 3, 1, 4).contiguous()
 
@@ -111,7 +112,7 @@ class HGTCavAttention(nn.Module):
 
         w_att, w_msg = self.get_hetero_edge_weights( types)
 
-        head_dim = q_in.shape[-1] // self.heads
+        head_dim = int(q_in.shape[-1]) // self.heads
 
         B, H, W, L = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
         # (B, H, W, L, out_C) -> (B, H, W, L, heads, D)
@@ -123,7 +124,7 @@ class HGTCavAttention(nn.Module):
         q_w = torch.einsum('bmhwip,bmijpq->bmhwijq', q, w_att)
         att_map = torch.einsum('bmhwijq,bmhwjq->bmhwij', q_w, k) * self.scale
         
-        att_map = att_map.masked_fill(mask == 0, -1e9)
+        att_map = att_map.masked_fill(mask == 0, float(-1e9))
         att_map = self.attend(att_map)
 
         # Message Passing
