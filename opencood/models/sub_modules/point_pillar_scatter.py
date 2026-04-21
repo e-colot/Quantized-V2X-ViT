@@ -10,11 +10,12 @@ class PointPillarScatter(nn.Module):
         self.max_cav = self.model_cfg.get('max_cav', None)
         
         grid_size = model_cfg['grid_size']
-        self.nx = int(grid_size[0])
-        self.ny = int(grid_size[1])
-        self.nz = int(grid_size[2])
+        self.nx = torch.tensor(grid_size[0], dtype=torch.int32, device='cuda')
+        self.ny = torch.tensor(grid_size[1], dtype=torch.int32, device='cuda')
+        self.nz = torch.tensor(grid_size[2], dtype=torch.int32, device='cuda')
 
         self.num_pixels = self.ny * self.nx
+        self.canvas_second_dim = self.num_pixels * self.max_cav
         
         assert self.nz == 1
 
@@ -32,7 +33,7 @@ class PointPillarScatter(nn.Module):
 
         # canvas: [C, B*max_cav*H*W]
         canvas = torch.zeros(
-            (self.num_bev_features, self.num_pixels * self.max_cav),
+            (self.num_bev_features, self.canvas_second_dim),
             dtype=pillar_features.dtype,
             device=pillar_features.device,
         )

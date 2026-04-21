@@ -86,8 +86,8 @@ def build_inputs(hypes):
 
     # Use opt shapes for input batch
     inputs = (
-        torch.randn(tuple(vf_opt), dtype=torch.float32).to(device),        # voxel_features
-        torch.zeros(tuple(vc_opt), dtype=torch.float32).to(device),         # voxel_coords
+        torch.randn(tuple(vf_opt), dtype=torch.float32).to(device),         # voxel_features
+        torch.zeros(tuple(vc_opt), dtype=torch.int32).to(device),           # voxel_coords
         torch.zeros(tuple(vnp_opt), dtype=torch.float32).to(device),        # voxel_num_points
         torch.ones((1,), dtype=torch.int32).to(device),                     # record_len
         torch.randn((1, max_cavs, 4, 4), dtype=torch.float32).to(device),   # spatial_correction_matrix
@@ -105,7 +105,7 @@ def build_inputs(hypes):
             min_shape=vc_min, 
             opt_shape=vc_opt, 
             max_shape=vc_max, 
-            dtype=torch.float32, name="voxel_coords"
+            dtype=torch.int32, name="voxel_coords"
         ),
         torch_tensorrt.Input(
             min_shape=vnp_min, 
@@ -131,7 +131,9 @@ def main(opt=None):
     traced_model = torch.jit.trace(model, inputs)
     traced_path = os.path.join(opt.model_dir, "TS_graph.log")
     with open(traced_path, "w") as f:
-        f.write(str(traced_model.graph))
+        graph = traced_model.graph.copy()
+        torch._C._jit_pass_inline(graph)
+        f.write(str(graph))
         print(f"Saved TorchScript graph to {traced_path}")
 
     print(f"{'-'*63}")
