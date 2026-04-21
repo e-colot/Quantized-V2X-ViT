@@ -75,18 +75,29 @@ class PointPillarTransformer(nn.Module):
 
         # B, max_cav, 3(dt dv infra), 1, 1
         prior_encoding = prior_encoding.unsqueeze(-1).unsqueeze(-1)
+        # Relative L2 summary: mean=0.000000e+00, median=0.000000e+00, max=0.000000e+00
 
         # n, 4 -> n, c
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
+        # Relative L2 summary: mean=2.909690e-04, median=2.876608e-04, max=3.430791e-04
+
         # n, c -> N, C, H, W
         spatial_features = self.scatter(voxel_coords, pillar_features)
+        # Relative L2 summary: mean=2.909690e-04, median=2.876609e-04, max=3.430791e-04
+
         spatial_features_2d = self.backbone(spatial_features)
+        # Relative L2 summary: mean=1.254411e-03, median=1.217855e-03, max=1.686136e-03
+
         # downsample feature to reduce memory
         if self.shrink_flag:
             spatial_features_2d = self.shrink_conv(spatial_features_2d)
+        # Relative L2 summary: mean=8.642389e-04, median=8.403341e-04, max=1.088899e-03
+
         # compressor
         if self.compression:
             spatial_features_2d = self.naive_compressor(spatial_features_2d)
+        # Relative L2 summary: mean=1.209472e-03, median=1.136962e-03, max=2.426849e-03
+
         # N, C, H, W -> B,  L, C, H, W
 
         regroup_feature, mask = regroup(spatial_features_2d,

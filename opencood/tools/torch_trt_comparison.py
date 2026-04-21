@@ -47,7 +47,7 @@ def _flatten_concat(output):
     return torch.cat(flattened, dim=0)
 
 
-def _batch_mse(torch_output, trt_output):
+def _batch_relative_l2_error(torch_output, trt_output, eps=1e-12):
     torch_flat = _flatten_concat(torch_output)
     trt_flat = _flatten_concat(trt_output)
 
@@ -56,7 +56,9 @@ def _batch_mse(torch_output, trt_output):
             f'Flattened output size mismatch: {torch_flat.numel()} vs {trt_flat.numel()}'
         )
 
-    return torch.mean((torch_flat - trt_flat) ** 2).item()
+    denom = torch.linalg.norm(torch_flat)
+    rel_l2 = torch.linalg.norm(torch_flat - trt_flat) / (denom + eps)
+    return rel_l2.item()
 
 
 def parser():
@@ -106,7 +108,7 @@ def main():
                              drop_last=False)
     
     print('Calling TensorRT builder')
-    build.main('ppif')
+    build.main(modelName)
 
     print('Loading TensorRT engine')
     engine_path = os.path.join(opt.model_dir, "trt.pt")
@@ -125,7 +127,7 @@ def main():
     _, model = train_utils.load_saved_model(saved_path, model)
     model.eval()
 
-    mse_history = []
+    rel_l2_history = []
 
     progress_bar = tqdm(data_loader,
                         total=len(data_loader),
@@ -154,39 +156,24 @@ def main():
             trtOutput = trt_model(voxel_features, voxel_coords, voxel_num_points, record_len, 
                         spatial_correction_matrix, prior_encoding)
 
-            batch_mse = _batch_mse(torchOutput, trtOutput)
-            mse_history.append(batch_mse)
+            batch_rel_l2 = _batch_relative_l2_error(torchOutput, trtOutput)
+            rel_l2_history.append(batch_rel_l2)
 
-            running_mse = float(np.mean(mse_history))
+            running_rel_l2 = float(np.mean(rel_l2_history))
             progress_bar.set_postfix(
-                batch_mse=f'{batch_mse:.3e}',
-                running_mse=f'{running_mse:.3e}',
+                batch_rel_l2=f'{batch_rel_l2:.3e}',
+                running_rel_l2=f'{running_rel_l2:.3e}',
             )
 
-    if not mse_history:
-        raise RuntimeError('No batches were processed; MSE history is empty.')
+    if not rel_l2_history:
+        raise RuntimeError('No batches were processed; relative L2 history is empty.')
 
     print(
-        'MSE summary: '
-        f'mean={np.mean(mse_history):.6e}, '
-        f'median={np.median(mse_history):.6e}, '
-        f'max={np.max(mse_history):.6e}'
+        'Relative L2 summary: '
+        f'mean={np.mean(rel_l2_history):.6e}, '
+        f'median={np.median(rel_l2_history):.6e}, '
+        f'max={np.max(rel_l2_history):.6e}'
     )
-
-    plt.figure(figsize=(10, 4))
-    plt.plot(mse_history, linewidth=1.5)
-
-    plt.xlabel('Batch index')
-    plt.ylabel('MSE')
-    plt.title('TensorRT vs PyTorch MSE per batch')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    fig_path = os.path.join(opt.model_dir, 'trt_vs_torch_mse.png')
-    plt.savefig(fig_path, dpi=150)
-    print(f'Saved MSE plot to: {fig_path}')
-    plt.show()
-
 
 if __name__ == '__main__':
     main()
