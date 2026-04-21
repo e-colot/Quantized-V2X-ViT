@@ -14,7 +14,7 @@ import open3d as o3d
 from torch.utils.data import DataLoader
 
 import opencood.hypes_yaml.yaml_utils as yaml_utils
-from opencood.tools import train_utils, inference_utils
+from opencood.tools import train_utils, inference_utils, build
 from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils
 from opencood.visualization import vis_utils
@@ -67,8 +67,13 @@ def main():
                              drop_last=False)
 
     print('Loading TensorRT engine')
-    engine_path = os.path.join(opt.model_dir, "trt.pt")
-    model = torch.jit.load(engine_path).cuda()
+    dataset_type = hypes['validate_dir'].split('/')[-1]
+    engine_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.pt')
+    try:
+        model = torch.jit.load(engine_path).cuda()
+    except:
+        build(modelName)
+        model = torch.jit.load(engine_path).cuda()
 
     device = torch.device('cuda')
 

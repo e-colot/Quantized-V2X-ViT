@@ -10,29 +10,6 @@ import opencood.hypes_yaml.yaml_utils as yaml_utils
 from opencood.data_utils.datasets import build_dataset
 
 
-def parser():
-    parser = argparse.ArgumentParser(description='Generate shapes.log from validation dataset')
-    parser.add_argument('--model', type=str, required=True)
-    opt = parser.parse_args()
-    return str(opt.model)
-
-
-class Arguments:
-    def __init__(self, model_name):
-        self.show_vis = False
-        self.show_sequence = False
-        self.save_vis = False
-        self.save_npy = False
-        self.global_sort_detections = False
-        self.fusion_method = 'intermediate'
-        if model_name == 'v2xvit':
-            self.model_dir = 'opencood/logs/v2x-vit'
-        elif model_name == 'ppif':
-            self.model_dir = 'opencood/logs/pointPillarIntermediateFusion'
-        else:
-            raise ValueError(f'Unsupported model: {model_name}')
-
-
 def _extract_input_tensors(batch_data, device='cpu'):
     cav_content = batch_data['ego']
     processed_lidar = cav_content['processed_lidar']
@@ -75,10 +52,22 @@ def _infer_linked_dimensions(shape_dict):
     return linked
 
 
-def main():
-    model_name = parser()
-    opt = Arguments(model_name)
+class Arguments:
+    def __init__(self, model_name):
+        self.show_vis = False
+        self.show_sequence = False
+        self.save_vis = False
+        self.save_npy = False
+        self.global_sort_detections = False
+        self.fusion_method = 'intermediate'
+        if model_name == 'v2xvit':
+            self.model_dir = 'opencood/logs/v2x-vit'
+        elif model_name == 'ppif':
+            self.model_dir = 'opencood/logs/pointPillarIntermediateFusion'
+        else:
+            raise ValueError(f'Unsupported model: {model_name}')
 
+def analyze_shape(hypes):
     shape_names = [
         'voxel_features',
         'voxel_coords',
@@ -88,8 +77,20 @@ def main():
         'prior_encoding',
     ]
 
-    hypes = yaml_utils.load_yaml(None, opt)
+    dataset_type = hypes['validate_dir'].split('/')[-1]
+    model = hypes['name']
+    shape_file_name = os.path.join('opencood/logs/shapes/', model + '_' + dataset_type + '.log')
 
+    print(f"\n{'=' * 15} SHAPE ANALYSIS {'=' * 15}")
+    # If shape_file_name exists, load and return its contents
+    if os.path.exists(shape_file_name):
+        with open(shape_file_name, 'r', encoding='utf-8') as f:
+            shape_stats = json.load(f)
+        print(f"Loaded existing shape log from {shape_file_name}")
+        print('-' * 52)
+        return shape_stats
+
+    print(f"No existing shape log in {shape_file_name}, creating it")
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False)
     print(f'{len(opencood_dataset)} samples found.')
@@ -134,12 +135,11 @@ def main():
     )
     shape_stats['opt_sample_index'] = int(opt_sample_index)
 
-    shapes_log_path = os.path.join(opt.model_dir, 'shapes.log')
-    with open(shapes_log_path, 'w', encoding='utf-8') as f:
+    # Save to shape_file_name
+    os.makedirs(os.path.dirname(shape_file_name), exist_ok=True)
+    with open(shape_file_name, 'w', encoding='utf-8') as f:
         json.dump(shape_stats, f, indent=2)
 
-    print(f'Saved shape ranges to {shapes_log_path}')
-
-
-if __name__ == '__main__':
-    main()
+    print(f'Saved shape log to {shape_file_name}')
+    print('-' * 52)
+    return shape_stats

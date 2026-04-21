@@ -111,7 +111,8 @@ def main():
     build.main(modelName)
 
     print('Loading TensorRT engine')
-    engine_path = os.path.join(opt.model_dir, "trt.pt")
+    dataset_type = hypes['validate_dir'].split('/')[-1]
+    engine_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.pt')
     trt_model = torch.jit.load(engine_path).cuda()
 
 

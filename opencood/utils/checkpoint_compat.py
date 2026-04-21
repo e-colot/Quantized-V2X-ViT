@@ -220,4 +220,3 @@ def print_remap_report(report: Dict[str, Any], max_items: int = 10):
     print(f"{'Shape mismatches':<32} | {len(shape_mismatch):<16}")
     print(f"{'Missing model keys':<32} | {len(missing_in_checkpoint):<16}")
     print('-' * 52)
-    print(' ')

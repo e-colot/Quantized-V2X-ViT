@@ -57,7 +57,7 @@ def load_saved_model(saved_path, model):
             model_file,
             map_location='cpu')
         try:
-            from opencood.tools import checkpoint_compat
+            from opencood.utils import checkpoint_compat
             remapped_state, remap_report = checkpoint_compat.remap_checkpoint_for_model(
                 checkpoint_state=checkpoint,
                 model_state=model.state_dict(),
