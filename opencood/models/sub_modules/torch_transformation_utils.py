@@ -469,7 +469,7 @@ def _affine_grid_sample_approx_prepare_norm_grid(theta: torch.Tensor, dsize: tor
     return norm_grid
 
 
-def _clamp(src:torch.Tensor, min:torch.Tensor, max:torch.Tensor):
+def clamp_tensor(src:torch.Tensor, min:torch.Tensor, max:torch.Tensor):
     r"""
     Clamp tensor values to an inclusive numeric range.
     Args:
@@ -544,12 +544,12 @@ def _affine_grid_sample_approx_bilinear_sample(
     H_minus_one = H - one
 
     if padding_mode == 'border':
-        x = _clamp(x, zero, W_minus_one)
-        y = _clamp(y, zero, H_minus_one)
+        x = clamp_tensor(x, zero, W_minus_one)
+        y = clamp_tensor(y, zero, H_minus_one)
     elif padding_mode == 'reflection':
         # Not taken
-        x = _clamp(_reflect_coordinates(x, reflect_x_low, reflect_x_high), zero, W_minus_one)
-        y = _clamp(_reflect_coordinates(y, reflect_y_low, reflect_y_high), zero, H_minus_one)
+        x = clamp_tensor(_reflect_coordinates(x, reflect_x_low, reflect_x_high), zero, W_minus_one)
+        y = clamp_tensor(_reflect_coordinates(y, reflect_y_low, reflect_y_high), zero, H_minus_one)
 
     x0 = torch.floor(x)
     y0 = torch.floor(y)
@@ -578,10 +578,10 @@ def _affine_grid_sample_approx_bilinear_sample(
         wc = wc * x1_valid * y0_valid
         wd = wd * x1_valid * y1_valid
 
-    x0_idx = _clamp(x0, zero, W_minus_one).to(torch.int32)
-    y0_idx = _clamp(y0, zero, H_minus_one).to(torch.int32)
-    x1_idx = _clamp(x1, zero, W_minus_one).to(torch.int32)
-    y1_idx = _clamp(y1, zero, H_minus_one).to(torch.int32)
+    x0_idx = clamp_tensor(x0, zero, W_minus_one).to(torch.int32)
+    y0_idx = clamp_tensor(y0, zero, H_minus_one).to(torch.int32)
+    x1_idx = clamp_tensor(x1, zero, W_minus_one).to(torch.int32)
+    y1_idx = clamp_tensor(y1, zero, H_minus_one).to(torch.int32)
 
     Ia = _gather_from_hw(src, x0_idx, y0_idx)
     Ib = _gather_from_hw(src, x0_idx, y1_idx)

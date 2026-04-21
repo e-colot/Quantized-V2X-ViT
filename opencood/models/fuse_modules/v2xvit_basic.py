@@ -5,7 +5,7 @@ from opencood.models.fuse_modules.hmsa import *
 from opencood.models.fuse_modules.mswin import *
 from opencood.models.sub_modules.torch_transformation_utils import \
     get_transformation_matrix, warp_affine, get_roi_and_cav_mask, \
-    get_discretized_transformation_matrix
+    get_discretized_transformation_matrix, clamp_tensor
 from torch import nn
 
 
@@ -85,13 +85,15 @@ class RelTemporalEncoding(nn.Module):
         self.register_buffer('RTE_ratio', torch.tensor(RTE_ratio, dtype=torch.int32))
         self.lin = nn.Linear(n_hid, n_hid)
 
+        self.num_embeddings = torch.tensor(self.emb.num_embeddings, dtype=torch.int32, device='cuda')
+        self.tensor_one = torch.tensor(1, dtype=torch.int32, device='cuda')
+
     def forward(self, x, t):
         # x: (N, H, W, C)  <- where N is B*L
         # t: (N)
         
-        # Compute indices: (N)
-        # Ensure t is treated as a Tensor throughout
-        indices = (t * self.RTE_ratio)
+        # Clamp is a safety for tensorRT conversion (required)
+        indices = clamp_tensor(t * self.RTE_ratio, self.tensor_one, self.num_embeddings)
         
         # Get temporal embeddings: (N, C)
         t_emb = self.lin(self.emb(indices))
