@@ -86,15 +86,15 @@ class RelTemporalEncoding(nn.Module):
         self.lin = nn.Linear(n_hid, n_hid)
 
         self.num_embeddings = torch.tensor(self.emb.num_embeddings, dtype=torch.int32, device='cuda')
-        self.tensor_one = torch.tensor(1, dtype=torch.int32, device='cuda')
+        self.tensor_zero = torch.tensor(0, dtype=torch.int32, device='cuda')
 
     def forward(self, x, t):
         # x: (N, H, W, C)  <- where N is B*L
         # t: (N)
         
         # Clamp is a safety for tensorRT conversion (required)
-        indices = clamp_tensor(t * self.RTE_ratio, self.tensor_one, self.num_embeddings)
-        
+        indices = clamp_tensor(t * self.RTE_ratio, self.tensor_zero, self.num_embeddings)
+
         # Get temporal embeddings: (N, C)
         t_emb = self.lin(self.emb(indices))
         
