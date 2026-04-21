@@ -45,6 +45,7 @@ class DownsampleConv(nn.Module):
             input_dim = dim
 
     def forward(self, x):
-        for _, layer in enumerate(self.layers):
+        for layer in self.layers:
             x = layer(x)
         return x
+    

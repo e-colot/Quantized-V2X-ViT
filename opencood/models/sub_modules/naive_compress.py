@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 
@@ -30,3 +29,4 @@ class NaiveCompressor(nn.Module):
         x = self.decoder(x)
 
         return x
+    

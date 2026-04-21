@@ -36,14 +36,6 @@ class PFNLayer(nn.Module):
     def forward(self, inputs):
 
         x = self.linear(inputs)
-        C = x.shape[-1]
-
-        # if self.use_norm:
-        #     # Reshape to (N*L, C) to use BatchNorm1d effectively
-        #     # TensorRT handles 2D BatchNorm much better
-        #     x = x.view(-1, C)
-        #     x = self.norm(x)
-        #     x = x.view(inputs.shape[0], inputs.shape[1], C)
         x = self.norm(x.permute(0, 2, 1)).permute(0, 2, 1) if self.use_norm else x
 
         x = F.relu(x)
@@ -52,7 +44,7 @@ class PFNLayer(nn.Module):
         if self.last_vfe:
             return x_max
         else:
-            x_repeat = x_max.expand(-1, inputs.shape[1], C)
+            x_repeat = x_max.expand(-1, inputs.shape[1], x.shape[-1])
             x_concatenated = torch.cat([x, x_repeat], dim=2)
             return x_concatenated
 

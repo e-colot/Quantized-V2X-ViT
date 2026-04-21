@@ -36,6 +36,8 @@ class BaseBEVBackbone(nn.Module):
         self.blocks = nn.ModuleList()
         self.deblocks = nn.ModuleList()
 
+        eps = 1e-3
+
         for idx in range(num_levels):
             cur_layers = [
                 nn.ZeroPad2d(1),
@@ -43,14 +45,14 @@ class BaseBEVBackbone(nn.Module):
                     c_in_list[idx], num_filters[idx], kernel_size=3,
                     stride=layer_strides[idx], padding=0, bias=False
                 ),
-                nn.BatchNorm2d(num_filters[idx], eps=1e-3, momentum=0.01),
+                nn.BatchNorm2d(num_filters[idx], eps=eps, momentum=0.01),
                 nn.ReLU()
             ]
             for _ in range(layer_nums[idx]):
                 cur_layers.extend([
                     nn.Conv2d(num_filters[idx], num_filters[idx],
                               kernel_size=3, padding=1, bias=False),
-                    nn.BatchNorm2d(num_filters[idx], eps=1e-3, momentum=0.01),
+                    nn.BatchNorm2d(num_filters[idx], eps=eps, momentum=0.01),
                     nn.ReLU()
                 ])
 
@@ -65,7 +67,7 @@ class BaseBEVBackbone(nn.Module):
                             stride=upsample_strides[idx], bias=False
                         ),
                         nn.BatchNorm2d(num_upsample_filters[idx],
-                                       eps=1e-3, momentum=0.01),
+                                       eps=eps, momentum=0.01),
                         nn.ReLU()
                     ))
                 else:
@@ -76,7 +78,7 @@ class BaseBEVBackbone(nn.Module):
                             stride,
                             stride=stride, bias=False
                         ),
-                        nn.BatchNorm2d(num_upsample_filters[idx], eps=1e-3,
+                        nn.BatchNorm2d(num_upsample_filters[idx], eps=eps,
                                        momentum=0.01),
                         nn.ReLU()
                     ))
@@ -86,7 +88,7 @@ class BaseBEVBackbone(nn.Module):
             self.deblocks.append(nn.Sequential(
                 nn.ConvTranspose2d(c_in, c_in, upsample_strides[-1],
                                    stride=upsample_strides[-1], bias=False),
-                nn.BatchNorm2d(c_in, eps=1e-3, momentum=0.01),
+                nn.BatchNorm2d(c_in, eps=eps, momentum=0.01),
                 nn.ReLU(),
             ))
 
@@ -106,11 +108,10 @@ class BaseBEVBackbone(nn.Module):
 
         if len(ups) > 1:
             x = torch.cat(ups, dim=1)
-        elif len(ups) == 1:
+        else:
             x = ups[0]
 
         if len(self.deblocks) > len(self.blocks):
             x = self.deblocks[-1](x)
 
-        spatial_features_2d = x
-        return spatial_features_2d
+        return x
