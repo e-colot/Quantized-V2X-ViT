@@ -219,7 +219,7 @@ class VoxelSetAbstraction(nn.Module):
         batch_size, num_keypoints, _ = keypoints.shape
 
         new_xyz = keypoints[kpt_mask]
-            new_xyz_batch_cnt = torch.tensor([(mask).sum() for mask in kpt_mask], device='cuda').int()
+        new_xyz_batch_cnt = torch.tensor([(mask).sum() for mask in kpt_mask], device='cuda').int()
 
         if 'raw_points' in self.model_cfg['features_source']:
             raw_points = batch_dict['origin_lidar']

@@ -10,7 +10,7 @@ from opencood.models.sub_modules.split_attn import SplitAttn
 
 def get_relative_distances(window_size):
     indices = torch.tensor(np.array(
-        [[x, y] for x in range(window_size) for y in range(window_size)]))
+        [[x, y] for x in range(window_size) for y in range(window_size)]), dtype=torch.int32)
     distances = indices[None, :, :] - indices[:, None, :]
     return distances
 
