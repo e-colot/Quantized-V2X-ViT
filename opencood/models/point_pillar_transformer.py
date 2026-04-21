@@ -86,7 +86,6 @@ class PointPillarTransformer(nn.Module):
 
         spatial_features_2d = self.backbone(spatial_features)
         # Relative L2 summary: mean=1.300207e-03, median=1.265567e-03, max=1.734211e-03
-        return spatial_features_2d
 
         # downsample feature to reduce memory
         if self.shrink_flag:
@@ -110,6 +109,8 @@ class PointPillarTransformer(nn.Module):
 
         # b l c h w -> b l h w c
         regroup_feature = regroup_feature.permute(0, 1, 3, 4, 2)
+        # return regroup_feature
+
         # transformer fusion
         fused_feature = self.fusion_net(regroup_feature, mask, spatial_correction_matrix)
         # b h w c -> b c h w

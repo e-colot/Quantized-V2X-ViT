@@ -99,7 +99,7 @@ class RelTemporalEncoding(nn.Module):
         # Broadcast across H and W: (N, 1, 1, C)
         t_emb = t_emb.unsqueeze(1).unsqueeze(2)
         
-        # Return combined feature
+        # combined feature
         return x + t_emb
 
 

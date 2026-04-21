@@ -40,7 +40,6 @@ class PointPillarIntermediate(nn.Module):
         # Keep record_len as a tensor so tracing/TensorRT does not bake in
         # a Python constant CAV count.
         spatial_features_2d = self.backbone(batch_spatial_features, record_len)
-        #return spatial_features_2d
 
         psm = self.cls_head(spatial_features_2d)
         rm = self.reg_head(spatial_features_2d)

@@ -139,7 +139,7 @@ def main(opt=None):
         enabled_precisions={torch.float32},
         truncate_long_and_double=True,
         require_full_compilation=True,
-        workspace_size=1 << 30,
+        workspace_size=1 << 33,
         allow_shape_tensors=True,
         ir='torchscript'
     )
