@@ -88,7 +88,7 @@ def build_inputs(hypes):
     inputs = (
         torch.randn(tuple(vf_opt), dtype=torch.float32).to(device),         # voxel_features
         torch.zeros(tuple(vc_opt), dtype=torch.int32).to(device),           # voxel_coords
-        torch.zeros(tuple(vnp_opt), dtype=torch.float32).to(device),        # voxel_num_points
+        torch.zeros(tuple(vnp_opt), dtype=torch.int32).to(device),          # voxel_num_points
         torch.ones((1,), dtype=torch.int32).to(device),                     # record_len
         torch.randn((1, max_cavs, 4, 4), dtype=torch.float32).to(device),   # spatial_correction_matrix
         torch.randn((1, max_cavs, 3), dtype=torch.float32).to(device)       # prior_encoding
@@ -111,7 +111,7 @@ def build_inputs(hypes):
             min_shape=vnp_min, 
             opt_shape=vnp_opt, 
             max_shape=vnp_max, 
-            dtype=torch.float32, name="voxel_num_points"
+            dtype=torch.int32, name="voxel_num_points"
         ),
         torch_tensorrt.Input(shape=[1], dtype=torch.int32, name="record_len"),
         torch_tensorrt.Input(shape=[1, max_cavs, 4, 4], dtype=torch.float32, name="spatial_correction_matrix"),

@@ -26,12 +26,9 @@ class PointPillarScatter(nn.Module):
         indices = (torch.select(voxel_coords, 1, 0).to(torch.int32) * self.num_pixels +
                 torch.select(voxel_coords, 1, 2).to(torch.int32) * self.nx +
                 torch.select(voxel_coords, 1, 3).to(torch.int32))
-
-        # if indices.min().item() < 0 or indices.max().item() >= batch_size * self.num_pixels:
-        #     raise ValueError(
-        #         f'PointPillarScatter index out of range: min={indices.min().item()}, '
-        #         f'max={indices.max().item()}, capacity={batch_size * self.num_pixels}'
-        #     )
+        # indices = (torch.narrow(voxel_coords, 1, 0, 1).squeeze(1).to(torch.int32) * self.num_pixels +
+        #             torch.narrow(voxel_coords, 1, 2, 1).squeeze(1).to(torch.int32) * self.nx +
+        #             torch.narrow(voxel_coords, 1, 3, 1).squeeze(1).to(torch.int32))
 
         # canvas: [C, B*max_cav*H*W]
         canvas = torch.zeros(

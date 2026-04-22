@@ -57,8 +57,8 @@ class SplitAttn(nn.Module):
         # B L 1 1 3C
         x_attn = self.rsoftmax(x_attn).view(B, L, 1, 1, -1)
 
-        out = sw * x_attn[:, :, :, :, 0:self.input_dim] + \
-              mw * x_attn[:, :, :, :, self.input_dim:2*self.input_dim] +\
-              bw * x_attn[:, :, :, :, self.input_dim*2:]
+        out = sw * torch.narrow(x_attn, 4, 0, self.input_dim) + \
+              mw * torch.narrow(x_attn, 4, self.input_dim, self.input_dim) +\
+              bw * torch.narrow(x_attn, 4, 2*self.input_dim, self.input_dim)
 
         return out

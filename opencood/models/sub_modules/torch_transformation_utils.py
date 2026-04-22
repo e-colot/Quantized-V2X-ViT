@@ -416,7 +416,7 @@ def _gather_from_hw(src: torch.Tensor, x_idx: torch.Tensor, y_idx: torch.Tensor)
             slice of src
     """
     # src shape: (B, C, H, W)
-    W = src.shape[3]
+    W = torch.tensor(src.shape[3], dtype=torch.int32, device=src.device)
     B = int(src.shape[0])
     C = int(src.shape[1])
     linear_idx = (y_idx * W + x_idx).clamp(min=0).view(B, 1, -1).expand(-1, C, -1)
