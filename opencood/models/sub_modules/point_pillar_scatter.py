@@ -22,13 +22,10 @@ class PointPillarScatter(nn.Module):
     def forward(self, voxel_coords, pillar_features):
         if voxel_coords.numel() == 0:
             raise ValueError('PointPillarScatter received an empty voxel_coords tensor.')
-
-        indices = (torch.select(voxel_coords, 1, 0).to(torch.int32) * self.num_pixels +
-                torch.select(voxel_coords, 1, 2).to(torch.int32) * self.nx +
-                torch.select(voxel_coords, 1, 3).to(torch.int32))
-        # indices = (torch.narrow(voxel_coords, 1, 0, 1).squeeze(1).to(torch.int32) * self.num_pixels +
-        #             torch.narrow(voxel_coords, 1, 2, 1).squeeze(1).to(torch.int32) * self.nx +
-        #             torch.narrow(voxel_coords, 1, 3, 1).squeeze(1).to(torch.int32))
+        
+        indices = (torch.narrow(voxel_coords, 1, 0, 1).squeeze(1).to(torch.int32) * self.num_pixels +
+                    torch.narrow(voxel_coords, 1, 2, 1).squeeze(1).to(torch.int32) * self.nx +
+                    torch.narrow(voxel_coords, 1, 3, 1).squeeze(1).to(torch.int32))
 
         # canvas: [C, B*max_cav*H*W]
         canvas = torch.zeros(

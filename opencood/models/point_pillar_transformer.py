@@ -74,18 +74,19 @@ class PointPillarTransformer(nn.Module):
 
         # B, max_cav, 3(dt dv infra), 1, 1
         prior_encoding = prior_encoding.unsqueeze(-1).unsqueeze(-1)
-        # Relative L2 summary: mean=0.000000e+00, median=0.000000e+00, max=0.000000e+00
+        # batch_size = 1 during inference
+        if prior_encoding.shape[0] != 1 or spatial_correction_matrix.shape[0] != 1:
+            raise NotImplementedError('Model has been restricted to a batch size of 1 for inference purposes')
+        # prior_encoding = prior_encoding.squeeze(0)
+        # spatial_correction_matrix = spatial_correction_matrix.squeeze(0)
 
         # n, 4 -> n, c
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
-        # Relative L2 summary: mean=1.580772e-06, median=1.607861e-06, max=2.306260e-06
 
         # n, c -> N, C, H, W
         spatial_features = self.scatter(voxel_coords, pillar_features)
-        # Relative L2 summary: mean=1.580772e-06, median=1.607861e-06, max=2.306260e-06
 
         spatial_features_2d = self.backbone(spatial_features)
-        # Relative L2 summary: mean=1.300207e-03, median=1.265567e-03, max=1.734211e-03
 
         # downsample feature to reduce memory
         if self.shrink_flag:
@@ -94,7 +95,6 @@ class PointPillarTransformer(nn.Module):
         # compressor
         if self.compression:
             spatial_features_2d = self.naive_compressor(spatial_features_2d)
-        # Relative L2 summary: mean=1.209472e-03, median=1.136962e-03, max=2.426849e-03
 
         # N, C, H, W -> B,  L, C, H, W
 
