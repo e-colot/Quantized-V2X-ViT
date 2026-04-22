@@ -105,7 +105,7 @@ class HGTCavAttention(nn.Module):
         x = x.permute(0, 2, 3, 1, 4).contiguous() # (B, H, W, L, C)
         mask = mask.unsqueeze(1) # (B, 1, H, W, L)
 
-        types = prior_encoding[:, :, 0, 0, 2].to(torch.int32)
+        types = torch.select(torch.select(torch.select(prior_encoding, 4, 2), 3, 0), 2, 0).to(torch.int32)
 
         q_in, k_in, v_in = self.to_qkv(x, types)
         # all the above are (B, H, W, L, out_C)

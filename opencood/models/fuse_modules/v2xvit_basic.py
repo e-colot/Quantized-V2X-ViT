@@ -178,16 +178,16 @@ class V2XTEncoder(nn.Module):
                                     dropout=dropout)]))
 
     def forward(self, x, mask, spatial_correction_matrix):
-
+        C = int(x.shape[-1])
         # transform the features to the current timestamp
         # velocity, time_delay, infra
         # (B,L,H,W,3)
-        prior_encoding = x[..., -3:]
+        prior_encoding = torch.narrow(x, 4, C-3, 3)
         # (B,L,H,W,C)
-        x = x[..., :-3]
+        x = torch.narrow(x, 4, 0, C-3)
         if self.use_RTE:
             # dt: (B,L)
-            dt = prior_encoding[:, :, 0, 0, 1].to(torch.int32)
+            dt = torch.select(torch.select(torch.select(prior_encoding, 4, 1), 3, 0), 2, 0).to(torch.int32)
             x = self.rte(x, dt)
         x = self.sttf(x, spatial_correction_matrix)
         com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(
@@ -211,5 +211,5 @@ class V2XTransformer(nn.Module):
 
     def forward(self, x, mask, spatial_correction_matrix):
         output = self.encoder(x, mask, spatial_correction_matrix)
-        output = output[:, 0]
+        output = torch.select(output, 1, 0)
         return output

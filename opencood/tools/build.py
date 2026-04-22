@@ -135,7 +135,20 @@ def main(opt=None):
         torch._C._jit_pass_inline(graph)
         f.write(str(graph))
         print(f"Saved TorchScript graph to {traced_path}")
-
+    print("Remaining Long/Double nodes:")
+    count = 0
+    for node in traced_model.graph.nodes():
+        for output in node.outputs():
+            t = output.type()
+            try:
+                scalar_type = t.scalarType()
+            except Exception:
+                continue
+            if scalar_type in ('Double', 'Long'):
+                src = node.sourceRange() or "unknown source"
+                print(f"  {scalar_type}: {node.kind()} | {output.debugName()} | {src}")
+                count += 1
+    print(f"Total: {count} Long/Double nodes")
     print(f"{'-'*63}")
 
     print("Compiling TorchScript traced model to TensorRT engine")
@@ -143,18 +156,12 @@ def main(opt=None):
         traced_model,
         inputs=trt_inputs,
         enabled_precisions={torch.float32},
-        truncate_long_and_double=True,
+        truncate_long_and_double=False,
         require_full_compilation=True,
         workspace_size=1 << 33,
         allow_shape_tensors=True,
         ir='torchscript'
     )
-    trt_graph_path = os.path.join(opt.model_dir, "TRT_graph.log")
-    with open(trt_graph_path, "w") as f:
-        f.write(str(trt_model.graph))
-        print(f"Saved TensorRT engine graph to {trt_graph_path}")
-    print('-' * 52)
-
     print(f"\n{'='*15} ENGINE SUCCESSFULLY BUILT {'='*15}")
 
     dataset_type = hypes['validate_dir'].split('/')[-1]

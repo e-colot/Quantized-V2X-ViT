@@ -40,7 +40,7 @@ def get_roi_and_cav_mask(input: torch.Tensor, cav_mask: torch.Tensor,
         dist_correction_matrix.reshape(-1, 2, 3), spatial_size)
     
     # (B,L,1,H,W)
-    input_slice = input[..., 0:1]
+    input_slice = torch.narrow(input, 4, 0, 1)
     input_reordered = input_slice.permute(0, 1, 4, 2, 3)
 
     roi_mask = get_rotated_roi(input_reordered, spatial_size, T)
@@ -135,14 +135,17 @@ def get_discretized_transformation_matrix(matrix: torch.Tensor, discrete_ratio: 
         including 2D transformation and 2D rotation.
 
     """
-    idx1 = torch.tensor([0, 1], dtype=torch.int32, device='cuda')
-    idx2 = torch.tensor([0, 1, 3], dtype=torch.int32, device='cuda')
-
-    matrix = matrix[:, :, idx1, :][:, :, :, idx2]
+    matrix = torch.narrow(matrix, 2, 0, 2)          # rows 0,1  (idx1 = [0,1])
+    col_0 = torch.narrow(matrix, 3, 0, 2)           # cols 0,1  (idx2[0:2])
+    col_3 = torch.narrow(matrix, 3, 3, 1)           # col  3    (idx2[2])
+    matrix = torch.cat([col_0, col_3], dim=3)        # cols [0,1,3]
     # normalize the x,y transformation
     scale = (discrete_ratio * downsample_rate).to(torch.float32)
     matrix = matrix.to(torch.float32)
-    matrix[:, :, :, -1] = matrix[:, :, :, -1] / scale
+
+    cols_01 = torch.narrow(matrix, 3, 0, 2)          # [..., 0:2]
+    col_2   = torch.narrow(matrix, 3, 2, 1) / scale  # [..., 2:3] / scale
+    matrix  = torch.cat([cols_01, col_2], dim=3)
     return matrix
 
 def _3x3_cramer_inverse(input: torch.Tensor):
@@ -157,9 +160,20 @@ def _3x3_cramer_inverse(input: torch.Tensor):
         out: torch.Tensor
             Inversed Tensor.
     """
-    a11, a12, a13 = input[..., 0, 0], input[..., 0, 1], input[..., 0, 2]
-    a21, a22, a23 = input[..., 1, 0], input[..., 1, 1], input[..., 1, 2]
-    a31, a32, a33 = input[..., 2, 0], input[..., 2, 1], input[..., 2, 2]
+    # Row 1
+    a11 = input.select(-2, 0).select(-1, 0)
+    a12 = input.select(-2, 0).select(-1, 1)
+    a13 = input.select(-2, 0).select(-1, 2)
+
+    # Row 2
+    a21 = input.select(-2, 1).select(-1, 0)
+    a22 = input.select(-2, 1).select(-1, 1)
+    a23 = input.select(-2, 1).select(-1, 2)
+
+    # Row 3
+    a31 = input.select(-2, 2).select(-1, 0)
+    a32 = input.select(-2, 2).select(-1, 1)
+    a33 = input.select(-2, 2).select(-1, 2)
 
     det = (a11 * (a22 * a33 - a23 * a32) -
            a12 * (a21 * a33 - a23 * a31) +
@@ -306,18 +320,18 @@ def get_rotation_matrix2d(M: torch.Tensor, dsize: torch.Tensor):
 
     # 4. Construct rotat_m functionally
     # Extract the 2x2 rotation from M
-    rot_22 = M[:, :2, :2] 
+    rot_22 = torch.narrow(torch.narrow(M, 1, 0, 2), 2, 0, 2)
     # Row 0: [m00, m01, 0]
     # Row 1: [m10, m11, 0]
     # Row 2: [0,   0,   1]
-    r0_rot = torch.cat([rot_22[:, 0, :], zeros.unsqueeze(1)], dim=1)
-    r1_rot = torch.cat([rot_22[:, 1, :], zeros.unsqueeze(1)], dim=1)
+    r0_rot = torch.cat([torch.select(rot_22, 1, 0), zeros.unsqueeze(1)], dim=1)
+    r1_rot = torch.cat([torch.select(rot_22, 1, 1), zeros.unsqueeze(1)], dim=1)
     rotat_m = torch.stack([r0_rot, r1_rot, r2], dim=1)
 
     # 5. Matrix Multiply
     affine_m = torch.bmm(torch.bmm(shift_m, rotat_m), shift_m_inv)
     
-    return affine_m[:, :2, :]
+    return torch.narrow(affine_m, 1, 0, 2)
 
 
 def get_transformation_matrix(M, spatial_size: torch.Tensor):
@@ -334,7 +348,10 @@ def get_transformation_matrix(M, spatial_size: torch.Tensor):
             Transformation matrix with shape :math:`(N, 2, 3)`.
     """
     T = get_rotation_matrix2d(M, spatial_size)
-    T[..., 2] = T[..., 2] + M[..., 2]
+    # T: (B, 2, 3)
+    T_3 = T.select(-1, 2)  # Select the 3rd column (index 2) of the last dim
+    M_3 = M.select(-1, 2)
+    T_3.add_(M_3)          # In-place addition modifies the original T
     return T
 
 
@@ -399,7 +416,10 @@ def _gather_from_hw(src: torch.Tensor, x_idx: torch.Tensor, y_idx: torch.Tensor)
             slice of src
     """
     # src shape: (B, C, H, W)
-    linear_idx = (y_idx * src.shape[3] + x_idx).view(src.shape[0], 1, -1).expand(-1, src.shape[1], -1)
+    W = src.shape[3]
+    B = int(src.shape[0])
+    C = int(src.shape[1])
+    linear_idx = (y_idx * W + x_idx).clamp(min=0).view(B, 1, -1).expand(-1, C, -1)
 
     # (B, C, H, W) -> (B, C, H*W)
     src_flat = src.flatten(2)
@@ -407,8 +427,8 @@ def _gather_from_hw(src: torch.Tensor, x_idx: torch.Tensor, y_idx: torch.Tensor)
     
     # Create 1D indices
     # We use .view() to place them in the correct dimensions for broadcasting
-    i = torch.arange(src.shape[0], device=device, dtype=torch.int32).view(src.shape[0], 1, 1) # (B, 1, 1)
-    j = torch.arange(src.shape[1], device=device, dtype=torch.int32).view(1, src.shape[1], 1)    # (1, L, 1)
+    i = torch.arange(B, device=device, dtype=torch.int32).view(B, 1, 1)
+    j = torch.arange(C, device=device, dtype=torch.int32).view(1, C, 1)
 
     # linear_idx is likely (B, L, K)
     # When we index with i and j, PyTorch broadcasts them to match linear_idx
@@ -435,8 +455,11 @@ def _affine_grid_sample_approx_prepare_norm_grid(theta: torch.Tensor, dsize: tor
     device = 'cuda'
     grid_dtype = theta.dtype
 
-    H_out = dsize[0].to(grid_dtype)
-    W_out = dsize[1].to(grid_dtype)
+    H_int = dsize[0]   # stays int32
+    W_int = dsize[1]   # stays int32
+    H_out = H_int.to(grid_dtype)   # float32, for arithmetic only
+    W_out = W_int.to(grid_dtype)
+
     eps = torch.tensor(1e-14, device=device, dtype=grid_dtype)
     one = torch.tensor(1.0, device=device, dtype=grid_dtype)
     two = torch.tensor(2.0, device=device, dtype=grid_dtype)
@@ -444,14 +467,14 @@ def _affine_grid_sample_approx_prepare_norm_grid(theta: torch.Tensor, dsize: tor
 
     if align_corners:
         step_y = two / (H_out - one + eps)
-        ys = torch.arange(H_out, device=device, dtype=grid_dtype) * step_y - one
+        ys = torch.arange(H_int, device=device, dtype=grid_dtype) * step_y - one
 
         step_x = two / (W_out - one + eps)
-        xs = torch.arange(W_out, device=device, dtype=grid_dtype) * step_x - one
+        xs = torch.arange(W_int, device=device, dtype=grid_dtype) * step_x - one
     else:
-        ys = (two * (torch.arange(H_out, device=device, dtype=grid_dtype) + half)
+        ys = (two * (torch.arange(H_int, device=device, dtype=grid_dtype) + half)
               / H_out - one)
-        xs = (two * (torch.arange(W_out, device=device, dtype=grid_dtype) + half)
+        xs = (two * (torch.arange(W_int, device=device, dtype=grid_dtype) + half)
               / W_out - one)
 
     grid_y = ys.view(-1, 1)
@@ -492,6 +515,7 @@ def clamp_tensor(src:torch.Tensor, min:torch.Tensor, max:torch.Tensor):
 def _affine_grid_sample_approx_bilinear_sample(
         src: torch.Tensor,
         norm_grid: torch.Tensor,
+        dsize: torch.Tensor,
         dtype: torch.dtype,
         padding_mode: str = 'zeros',
         align_corners: bool = True):
@@ -502,6 +526,8 @@ def _affine_grid_sample_approx_bilinear_sample(
             Source feature map with shape :math:`(B, C, H, W)`.
         norm_grid: torch.Tensor
             Normalized sampling grid with shape :math:`(B, H_out, W_out, 2)`.
+        dsize: torch.Tensor 
+            Output spatial dimensions as (H_out, W_out).
         dtype: torch.dtype
             Computation dtype for coordinate transforms and weights.
         padding_mode: str
@@ -516,13 +542,13 @@ def _affine_grid_sample_approx_bilinear_sample(
     
     device = src.device # Best practice: use the source tensor's device
     
-    x = norm_grid[..., 0]
-    y = norm_grid[..., 1]
+    x = torch.select(norm_grid, -1, 0)
+    y = torch.select(norm_grid, -1, 1)
 
     # FIX 1: Use .size() and cast to Tensor immediately to stay in the graph
     # This prevents aten::item during the math operations below
-    H = torch.tensor(src.shape[2], device=device, dtype=dtype)
-    W = torch.tensor(src.shape[3], device=device, dtype=dtype)
+    H = dsize[0].to(dtype)
+    W = dsize[1].to(dtype)
     
     zero = torch.tensor(0.0, device=device, dtype=dtype)
     one = torch.tensor(1.0, device=device, dtype=dtype)
@@ -640,6 +666,7 @@ def affine_grid_sample_approx(src: torch.Tensor, theta: torch.Tensor, dsize: tor
     return _affine_grid_sample_approx_bilinear_sample(
         src,
         norm_grid,
+        dsize,
         theta.dtype,
         padding_mode=padding_mode,
         align_corners=align_corners,
@@ -680,9 +707,11 @@ def warp_affine(
     # src_norm_trans_dst_norm = torch.inverse(dst_norm_trans_src_norm)
     src_norm_trans_dst_norm = _3x3_cramer_inverse(dst_norm_trans_src_norm)
     src_for_sample = src.half() if src_norm_trans_dst_norm.dtype == torch.half else src
+
+    sliced_src_norm_trans_dst_norm = torch.narrow(src_norm_trans_dst_norm, 1, 0, 2)
     return affine_grid_sample_approx(src_for_sample,
-                                     src_norm_trans_dst_norm[:, :2, :],
-                                     dsize,
-                                     mode=mode,
-                                     padding_mode=padding_mode,
-                                     align_corners=align_corners)
+                                       sliced_src_norm_trans_dst_norm,
+                                       dsize,
+                                       mode=mode,
+                                       padding_mode=padding_mode,
+                                       align_corners=align_corners)

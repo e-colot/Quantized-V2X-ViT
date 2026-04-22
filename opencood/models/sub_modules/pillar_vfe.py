@@ -101,22 +101,24 @@ class PillarVFE(nn.Module):
     def forward(self, voxel_features, voxel_coords, voxel_num_points):
 
         points_mean = \
-            voxel_features[:, :, :3].sum(dim=1, keepdim=True) / \
+            torch.narrow(voxel_features, 2, 0, 3).sum(dim=1, keepdim=True) / \
             voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
-        f_cluster = voxel_features[:, :, :3] - points_mean
+        f_cluster = torch.narrow(voxel_features, 2, 0, 3) - points_mean
 
         voxel_coords = voxel_coords.to(voxel_features.dtype)
         
-        row0 = voxel_features[:, :, 0] - (voxel_coords[:, 3].unsqueeze(1) * self.voxel_x + self.x_offset)
-        row1 = voxel_features[:, :, 1] - (voxel_coords[:, 2].unsqueeze(1) * self.voxel_y + self.y_offset)
-        row2 = voxel_features[:, :, 2] - (voxel_coords[:, 1].unsqueeze(1) * self.voxel_z + self.z_offset)
+        row0 = torch.select(voxel_features, 2, 0) - (torch.select(voxel_coords, 1, 3).unsqueeze(1) * self.voxel_x + self.x_offset)
+        row1 = torch.select(voxel_features, 2, 1) - (torch.select(voxel_coords, 1, 2).unsqueeze(1) * self.voxel_y + self.y_offset)
+        row2 = torch.select(voxel_features, 2, 2) - (torch.select(voxel_coords, 1, 1).unsqueeze(1) * self.voxel_z + self.z_offset)
         
         f_center = torch.stack((row0, row1, row2), dim=2)
 
-        kept_features = voxel_features if self.use_absolute_xyz else voxel_features[:, :, 3:]
+        kept_features = voxel_features \
+            if self.use_absolute_xyz \
+            else torch.narrow(voxel_features, 2, 3, voxel_features.shape[2]-3)
 
         if self.with_distance:
-            points_dist = torch.norm(voxel_features[:, :, :3], 2, 2, keepdim=True)
+            points_dist = torch.norm(torch.narrow(voxel_features, 2, 0, 3), 2, 2, keepdim=True)
             features = torch.cat((kept_features, f_cluster, f_center, points_dist), dim=-1)
         else:
             features = torch.cat((kept_features, f_cluster, f_center), dim=-1)

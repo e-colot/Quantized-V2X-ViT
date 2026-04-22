@@ -34,7 +34,7 @@ class BaseWindowAttention(nn.Module):
         if self.relative_pos_embedding:            
             stride = 2 * window_size - 1
             rel_coords = get_relative_distances(window_size) + window_size - 1
-            indices_1d = rel_coords[:, :, 0] * stride + rel_coords[:, :, 1]
+            indices_1d = torch.select(rel_coords, 2, 0) * stride + torch.select(rel_coords, 2, 1)
             indices_1d = indices_1d.clamp(min=0)
             
             # Register the INDEX MAP as a buffer (TensorRT constant)
