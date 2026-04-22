@@ -55,29 +55,37 @@ class HGTCavAttention(nn.Module):
             nn.init.zeros_(b)
 
     def apply_type_linear(self, x, types, weight, bias):
-        """Vectorized linear projection based on types (B, L)"""
+        r"""
+        x: (H, W, L, C)
+        types: (L)
+        """
         # Flatten and gather weights for each token: (B*L, out_dim, in_dim)
-        flat_types = types.view(-1).to(torch.int32).clamp(min=0)
+        flat_types = types.to(torch.int32).clamp(min=0)
+
         w = weight[flat_types] 
         b = bias[flat_types].unsqueeze(-1)
         
         # Reshape x for batch matrix multiplication
-        # (B, H, W, L, C) -> (B, L, H, W, C) -> (B*L, H*W, C)
-        BL = int(x.shape[0]) * int(x.shape[3])
-        HW = int(x.shape[1]) * int(x.shape[2])
-        C  = int(x.shape[4])
-        x_flat = x.permute(0, 3, 1, 2, 4).reshape(BL, HW, C)
+        # (H, W, L, C) -> (L, H, W, C) -> (L, H*W, C)
+        HW = int(x.shape[0]) * int(x.shape[1])
+        L = int(x.shape[2])
+        C = int(x.shape[3])
+        x_flat = x.permute(2, 0, 1, 3).reshape(L, HW, C)
         
         # out = x @ W.T + b
-        # (B*L, H*W, C) @ (B*L, C, out_C) -> (B*L, H*W, out_C)
+        # (L, H*W, C) @ (L, C, out_C) -> (L, H*W, out_C)
         out = torch.bmm(x_flat, w.transpose(-1, -2)) + b.transpose(-1, -2)
 
-        # (B*L, H*W, out_C) -> (B, L, H, W, out_C)
-        out = out.reshape(int(x.shape[0]), int(x.shape[3]), int(x.shape[1]), int(x.shape[2]), -1)
-        # (B, L, H, W, out_C) -> (B, H, W, L, out_C)
-        return out.permute(0, 2, 3, 1, 4).contiguous()
+        # (L, H*W, out_C) -> (L, H, W, out_C)
+        out = out.reshape(L, int(x.shape[0]), int(x.shape[1]), -1)
+        # (L, H, W, out_C) -> (H, W, L, out_C)
+        return out.permute(1, 2, 0, 3).contiguous()
 
     def to_qkv(self, x, types):
+        r"""
+        x: (H, W, L, C)
+        types: (L)
+        """
         q = self.apply_type_linear(x, types, self.q_weight, self.q_bias)
         k = self.apply_type_linear(x, types, self.k_weight, self.k_bias)
         v = self.apply_type_linear(x, types, self.v_weight, self.v_bias)
@@ -87,54 +95,77 @@ class HGTCavAttention(nn.Module):
         return self.apply_type_linear(x, types, self.a_weight, self.a_bias)
 
     def get_hetero_edge_weights(self, types):
-        t1 = types.unsqueeze(2) 
-        t2 = types.unsqueeze(1)
+        r"""
+        types: (L)
+        """
+        # t1: (L, 1)
+        t1 = types.unsqueeze(1) 
+        # t1: (1, L)
+        t2 = types.unsqueeze(0)
+
         relation_idx = (t1 * torch.tensor(self.num_types, dtype=torch.int32, device='cuda') + t2).view(-1)
         
         w_att = self.relation_att[relation_idx]
-        w_att = w_att.view(types.shape[0], types.shape[1], types.shape[1], self.heads, -1, self.relation_att.shape[-1])
+        # w_att & w_msg: (L, L, heads, -1, rel_dim)
+        w_att = w_att.view(types.shape[0], types.shape[0], self.heads, -1, self.relation_att.shape[-1])
         w_msg = self.relation_msg[relation_idx].view(w_att.shape)
         
-        w_att = w_att.permute(0, 3, 1, 2, 4, 5).contiguous()
-        w_msg = w_msg.permute(0, 3, 1, 2, 4, 5).contiguous()
+        # both (heads, L, L, -1, rel_dim)
+        w_att = w_att.permute(2, 0, 1, 3, 4).contiguous()
+        w_msg = w_msg.permute(2, 0, 1, 3, 4).contiguous()
         return w_att, w_msg
 
     def forward(self, x, mask, prior_encoding):
-        # x shape: (B, L, H, W, C)
+        r"""
+        x: (L, H, W, C)
+        mask: (H, W, 1, L)
+        prior_encoding: (L, H, W, 3)
+        """
 
-        x = x.permute(0, 2, 3, 1, 4).contiguous() # (B, H, W, L, C)
-        mask = mask.unsqueeze(1) # (B, 1, H, W, L)
+        x = x.permute(1, 2, 0, 3).contiguous()
+        # x: (H, W, L, C)
 
-        types = torch.select(torch.select(torch.select(prior_encoding, 4, 2), 3, 0), 2, 0).to(torch.int32)
+        types = torch.select(torch.select(torch.select(prior_encoding, 3, 2), 2, 0), 1, 0).to(torch.int32)
+        # types: (L)
 
         q_in, k_in, v_in = self.to_qkv(x, types)
-        # all the above are (B, H, W, L, out_C)
-
-        w_att, w_msg = self.get_hetero_edge_weights( types)
+        # all the above are (H, W, L, out_C)
 
         head_dim = int(q_in.shape[-1]) // self.heads
 
-        B, H, W, L = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
-        # (B, H, W, L, out_C) -> (B, H, W, L, heads, D)
-        q = q_in.reshape(B, H, W, L, self.heads, head_dim).permute(0, 4, 1, 2, 3, 5).contiguous()
-        k = k_in.reshape(B, H, W, L, self.heads, head_dim).permute(0, 4, 1, 2, 3, 5).contiguous()
-        v = v_in.reshape(B, H, W, L, self.heads, head_dim).permute(0, 4, 1, 2, 3, 5).contiguous()
+        H, W, L = x.shape[0], x.shape[1], x.shape[2]
 
-        # Attention Map (Einsum is TRT-friendly in recent versions)
-        q_w = torch.einsum('bmhwip,bmijpq->bmhwijq', q, w_att)
-        att_map = torch.einsum('bmhwijq,bmhwjq->bmhwij', q_w, k) * self.scale
+        q = q_in.reshape(H, W, L, self.heads, head_dim).permute(3, 0, 1, 2, 4).contiguous()
+        k = k_in.reshape(H, W, L, self.heads, head_dim).permute(3, 0, 1, 2, 4).contiguous()
+        v = v_in.reshape(H, W, L, self.heads, head_dim).permute(3, 0, 1, 2, 4).contiguous()
+        # (H, W, L, out_C) -> (H, W, L, heads, D) -> (heads, H, W, L, D)
+
+        w_att, w_msg = self.get_hetero_edge_weights(types)
+        # both (heads, L, L, -1, rel_dim)
+
+        q_w = torch.einsum('mhwip,mijpq->mhwijq', q, w_att)
+        # q_w: (heads, H, W, L, L, rel_dim)
+        att_map = torch.einsum('mhwijq,mhwjq->mhwij', q_w, k) * self.scale
+        # att_map: (heads, H, W, L, L)
         
+        mask = mask.unsqueeze(0)
+        # mask: (1, H, W, 1, L)
         att_map = att_map.masked_fill(mask == 0, float(-1e9))
         att_map = self.attend(att_map)
+        # att_map: (heads, H, W, L, L)
 
         # Message Passing
-        v_msg = torch.einsum('bmijpc,bmhwjp->bmhwijc', w_msg, v)
-        out = torch.einsum('bmhwij,bmhwijc->bmhwic', att_map, v_msg)
+        v_msg = torch.einsum('mijpc,mhwjp->mhwijc', w_msg, v)
+        # v_msg: (heads, H, W, L, L, rel_dim)
+        out = torch.einsum('mhwij,mhwijc->mhwic', att_map, v_msg)
+        # out: (heads, H, W, L, rel_dim)
 
         # Output projection
-        out = out.permute(0, 2, 3, 4, 1, 5).contiguous().view(x.shape)
+        out = out.permute(1, 2, 3, 0, 4).contiguous().view(x.shape)
+        # out: (H, W, L, heads*rel_dim = C)
         out = self.to_out(out, types)
         out = self.drop_out(out)
         
-        return out.permute(0, 3, 1, 2, 4).contiguous()
+        return out.permute(2, 0, 1, 3).contiguous()
+        # out: (L, H, W, C)
     

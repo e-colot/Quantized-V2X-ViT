@@ -53,8 +53,10 @@ class BaseWindowAttention(nn.Module):
         )
 
     def forward(self, x):
-        # x shape: (b, l, h, w, c)
-        b, l, h, w = int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3])
+        r"""
+        x: (L, H, W, C)
+        """
+        l, h, w = int(x.shape[0]), int(x.shape[1]), int(x.shape[2])
         ws = self.window_size
 
         qkv = self.to_qkv(x)
@@ -71,35 +73,47 @@ class BaseWindowAttention(nn.Module):
         if new_h < 1: new_h = 1
         if new_w < 1: new_w = 1
      
-        # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        q = q.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)
-        # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
-        q = q.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
-        # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
-        q = q.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
-        q = q.reshape(b, l, self.heads, new_h * new_w, ws * ws, head_dim)
+        q = q.reshape(l, new_h, ws, new_w, ws, qkv_dim)
+        # (l, h, w, c) -> (l, new_h, w_size, w, c) -> (l, new_h, w_size, new_w, w_size, c)
 
-        # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        k = k.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)
-        # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
-        k = k.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
-        # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
-        k = k.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
-        k = k.reshape(b, l, self.heads, new_h * new_w, ws * ws, head_dim)
+        q = q.reshape(l, new_h, ws, new_w, ws, self.heads, head_dim)
+        # (l, new_h, w_size, new_w, w_size, c) -> (l, new_h, w_size, new_w, w_size, heads, c_heads)
+
+        q = q.permute(0, 5, 1, 3, 2, 4, 6).contiguous()
+        # (l, new_h, w_size, new_w, w_size, heads, c_heads) -> (l, heads, new_h, new_w, w_size, w_size, c_heads)
+
+        q = q.reshape(l, self.heads, new_h * new_w, ws * ws, head_dim)
+        # (l, heads, new_h, new_w, w_size, w_size, c_heads) -> (l, heads, new_h*new_w, w_size*w_size, c_heads)
+
+
+        k = k.reshape(l, new_h, ws, new_w, ws, qkv_dim)
+        # (l, h, w, c) -> (l, new_h, w_size, w, c) -> (l, new_h, w_size, new_w, w_size, c)
+
+        k = k.reshape(l, new_h, ws, new_w, ws, self.heads, head_dim)
+        # (l, new_h, w_size, new_w, w_size, c) -> (l, new_h, w_size, new_w, w_size, heads, c_heads)
+
+        k = k.permute(0, 5, 1, 3, 2, 4, 6).contiguous()
+        # (l, new_h, w_size, new_w, w_size, heads, c_heads) -> (l, heads, new_h, new_w, w_size, w_size, c_heads)
+
+        k = k.reshape(l, self.heads, new_h * new_w, ws * ws, head_dim)
+        # (l, heads, new_h, new_w, w_size, w_size, c_heads) -> (l, heads, new_h*new_w, w_size*w_size, c_heads)
+
                 
-        # (b, l, h, w, c) -> (b, l, new_h, w_size, w, c) -> (b, l, new_h, w_size, new_w, w_size, c)
-        v = v.reshape(b, l, new_h, ws, new_w, ws, qkv_dim)
-        # (b, l, new_h, w_size, new_w, w_size, c) -> (b, l, new_h, w_size, new_w, w_size, heads, c_heads)
-        v = v.reshape(b, l, new_h, ws, new_w, ws, self.heads, head_dim)
-        # (b, l, new_h, w_size, new_w, w_size, heads, c_heads) -> (b, l, heads, new_h, new_w, w_size, w_size, c_heads)
-        v = v.permute(0, 1, 6, 2, 4, 3, 5, 7).contiguous()
-        # (b, l, heads, new_h, new_w, w_size, w_size, c_heads) -> (b, l, heads, new_h*new_w, w_size*w_size, c_heads)
-        v = v.reshape(b, l, self.heads, new_h * new_w, ws * ws, head_dim)
+        v = v.reshape(l, new_h, ws, new_w, ws, qkv_dim)
+        # (l, h, w, c) -> (l, new_h, w_size, w, c) -> (l, new_h, w_size, new_w, w_size, c)
 
-        # (b, l, heads, new_h*new_w, w_size*w_size, w_size*w_size)
+        v = v.reshape(l, new_h, ws, new_w, ws, self.heads, head_dim)
+        # (l, new_h, w_size, new_w, w_size, c) -> (l, new_h, w_size, new_w, w_size, heads, c_heads)
+
+        v = v.permute(0, 5, 1, 3, 2, 4, 6).contiguous()
+        # (l, new_h, w_size, new_w, w_size, heads, c_heads) -> (l, heads, new_h, new_w, w_size, w_size, c_heads)
+
+        v = v.reshape(l, self.heads, new_h * new_w, ws * ws, head_dim)
+        # (l, heads, new_h, new_w, w_size, w_size, c_heads) -> (l, heads, new_h*new_w, w_size*w_size, c_heads)
+
+
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        # (l, heads, new_h*new_w, w_size*w_size, w_size*w_size)
 
         # Positional Embedding
         if self.relative_pos_embedding:
@@ -110,21 +124,24 @@ class BaseWindowAttention(nn.Module):
         else:
             dots += self.pos_embedding
 
-        # (b, l, heads, new_h*new_w, w_size*w_size, w_size*w_size)
         attn = dots.softmax(dim=-1)
+        # (l, heads, new_h*new_w, w_size*w_size, w_size*w_size)
 
-        # (b, l, heads, new_h*new_w, w_size*w_size, c_head)
         out = torch.matmul(attn, v)
+        # (l, heads, new_h*new_w, w_size*w_size, c_head)
 
-        # (b, l, heads, new_h*new_w, w_size*w_size, c_head) -> (b, l, heads, new_h, new_w, w_size, w_size, c_head)
-        out = out.reshape(b, l, self.heads, new_h, new_w, ws, ws, head_dim)
-        # (b, l, heads, new_h, new_w, w_size, w_size, c_head) -> (b, l, new_h, w_size, new_w, w_size, heads, c_head)
-        out = out.permute(0, 1, 3, 5, 4, 6, 2, 7).contiguous()
-        # (b, l, new_h, w_size, new_w, w_size, heads, c_head) -> (b, l, new_h*w_size, new_w*w_size, heads*c_head)
-        out = out.reshape(b, l, new_h * ws, new_w * ws, self.heads * head_dim)
+        out = out.reshape(l, self.heads, new_h, new_w, ws, ws, head_dim)
+        # (l, heads, new_h*new_w, w_size*w_size, c_head) -> (l, heads, new_h, new_w, w_size, w_size, c_head)
+        
+        out = out.permute(0, 2, 4, 3, 5, 1, 6).contiguous()
+        # (l, heads, new_h, new_w, w_size, w_size, c_head) -> (l, new_h, w_size, new_w, w_size, heads, c_head)
 
-        # 7. Final Projection
+        out = out.reshape(l, new_h * ws, new_w * ws, self.heads * head_dim)
+        # (l, new_h, w_size, new_w, w_size, heads, c_head) -> (l, new_h*w_size, new_w*w_size, heads*c_head)
+
+
         out = self.to_out(out)
+        # out: (l, h, w, c)
 
         return out
 

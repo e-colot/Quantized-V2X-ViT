@@ -77,14 +77,14 @@ class PointPillarTransformer(nn.Module):
         # batch_size = 1 during inference
         if prior_encoding.shape[0] != 1 or spatial_correction_matrix.shape[0] != 1:
             raise NotImplementedError('Model has been restricted to a batch size of 1 for inference purposes')
-        # prior_encoding = prior_encoding.squeeze(0)
-        # spatial_correction_matrix = spatial_correction_matrix.squeeze(0)
+        prior_encoding = prior_encoding.squeeze(0)
+        spatial_correction_matrix = spatial_correction_matrix.squeeze(0)
 
-        # n, 4 -> n, c
         pillar_features = self.pillar_vfe(voxel_features, voxel_coords, voxel_num_points)
+        # (N, 4) -> (N, C)
 
-        # n, c -> N, C, H, W
         spatial_features = self.scatter(voxel_coords, pillar_features)
+        # (N, C) -> (N, C, H, W)
 
         spatial_features_2d = self.backbone(spatial_features)
 
@@ -96,25 +96,25 @@ class PointPillarTransformer(nn.Module):
         if self.compression:
             spatial_features_2d = self.naive_compressor(spatial_features_2d)
 
-        # N, C, H, W -> B,  L, C, H, W
 
         regroup_feature, mask = regroup(spatial_features_2d,
                                         record_len,
                                         self.max_cav)
-        # prior encoding added
-        prior_encoding = prior_encoding.repeat(1, 1, 1,
-                                               regroup_feature.shape[3],
-                                               regroup_feature.shape[4])
-        regroup_feature = torch.cat([regroup_feature, prior_encoding], dim=2)
+        # (N, C, H, W) -> (L, C, H, W)
 
-        # b l c h w -> b l h w c
-        regroup_feature = regroup_feature.permute(0, 1, 3, 4, 2)
-        # return regroup_feature
+        # prior encoding added
+        prior_encoding = prior_encoding.repeat(1, 1,
+                                               regroup_feature.shape[2],
+                                               regroup_feature.shape[3])
+        regroup_feature = torch.cat([regroup_feature, prior_encoding], dim=1)
+
+        regroup_feature = regroup_feature.permute(0, 2, 3, 1)
+        # (L, C, H, W) -> (L, H, W, C)
 
         # transformer fusion
         fused_feature = self.fusion_net(regroup_feature, mask, spatial_correction_matrix)
-        # b h w c -> b c h w
-        fused_feature = fused_feature.permute(0, 3, 1, 2)
+        fused_feature = fused_feature.permute(2, 0, 1)
+        # (H, W, C) -> (C, H, W)
 
         psm = self.cls_head(fused_feature)
         rm = self.reg_head(fused_feature)

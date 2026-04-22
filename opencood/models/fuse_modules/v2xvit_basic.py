@@ -21,28 +21,34 @@ class STTF(nn.Module):
         self.register_buffer('downsample_rate', torch.tensor(float(args['downsample_rate']), dtype=torch.float32, device=device))
 
     def forward(self, x, spatial_correction_matrix):
+        r"""
+        x: (L, H, W, C)
+        spatial_correction_matrix: (M, 4, 4)
+        """
         device = 'cuda'
-        orig_shape = x.shape # (B, L, H, W, C)
+        orig_shape = x.shape # (L, H, W, C)
 
-        # x shape: (B, L, H, W, C) -> (B, L, C, H, W)
-        x = x.permute(0, 1, 4, 2, 3)
-        spatial_size = torch.tensor([orig_shape[2], orig_shape[3]], device=device, dtype=torch.int32)
+        # x shape: (L, H, W, C) -> (L, C, H, W)
+        x = x.permute(0, 3, 1, 2)
 
+        # spatial size = [H, W]
+        spatial_size = torch.tensor([orig_shape[1], orig_shape[2]], device=device, dtype=torch.int32)
+
+        # dist_correction_matrix: (M, 2, 3)
         dist_correction_matrix = get_discretized_transformation_matrix(
             spatial_correction_matrix, 
             self.discrete_ratio,
             self.downsample_rate
         )
 
-        matrices = dist_correction_matrix.reshape(-1, 2, 3)
-        T = get_transformation_matrix(matrices, spatial_size)
+        # transformation_matrix: (M, 2, 3)
+        transformation_matrix = get_transformation_matrix(dist_correction_matrix, spatial_size)
         
-        x_flat = x.reshape(-1, orig_shape[4], orig_shape[2], orig_shape[3])
-        x_warped = warp_affine(x_flat, T, spatial_size)
+        # x_warped: (L, C, H, W)
+        x_warped = warp_affine(x, transformation_matrix, spatial_size)
         
-        # (B*L, C, H, W) -> (B, L, C, H, W) -> (B, L, H, W, C)
-        x = x_warped.view(x.shape)
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
+        # (L, C, H, W) -> (L, H, W, C)
+        x = x_warped.permute(0, 2, 3, 1).contiguous()
         
         return x
 
@@ -54,17 +60,15 @@ class RTE(nn.Module):
         self.emb = RelTemporalEncoding(dim, RTE_ratio=self.RTE_ratio)
 
     def forward(self, x, dts):
-        # x: (B, L, H, W, C)
-        # dts: (B, L)
+        r"""
+        x: (L, H, W, C)
+        dts: (L)
+        """
         
-        # Flatten B and L to process everything in one go
-        x_flat = x.view(-1, x.shape[2], x.shape[3], x.shape[4])
-        dts_flat = dts.view(-1)
+        # Result: (L, H, W, C)
+        x_rte = self.emb(x, dts)
         
-        # Result: (B*L, H, W, C)
-        x_rte = self.emb(x_flat, dts_flat)
-        
-        return x_rte.view(x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4])
+        return x_rte
 
 
 class RelTemporalEncoding(nn.Module):
@@ -89,16 +93,18 @@ class RelTemporalEncoding(nn.Module):
         self.tensor_zero = torch.tensor(0, dtype=torch.int32, device='cuda')
 
     def forward(self, x, t):
-        # x: (N, H, W, C)  <- where N is B*L
-        # t: (N)
+        r"""
+        x: (L, H, W, C)
+        t: (L)
+        """
         
         # Clamp is a safety for tensorRT conversion (required)
         indices = clamp_tensor(t * self.RTE_ratio, self.tensor_zero, self.num_embeddings)
 
-        # Get temporal embeddings: (N, C)
+        # Get temporal embeddings: (L, C)
         t_emb = self.lin(self.emb(indices))
         
-        # Broadcast across H and W: (N, 1, 1, C)
+        # Broadcast across H and W: (L, 1, 1, C)
         t_emb = t_emb.unsqueeze(1).unsqueeze(2)
         
         # combined feature
@@ -140,9 +146,16 @@ class V2XFusionBlock(nn.Module):
                                             'fusion_method'])]))
 
     def forward(self, x, mask, prior_encoding):
+        r"""
+        x: (L, H, W, C)
+        mask: (H, W, 1, L)
+        prior_encoding: (L, H, W, 3)
+        """
         for layer in self.layers:
             x = layer[0](x, mask=mask, prior_encoding=prior_encoding) + x
+            # x: (L, H, W, C)
             x = layer[1](x) + x
+            # x: (L, H, W, C)
         return x
 
 
@@ -178,18 +191,32 @@ class V2XTEncoder(nn.Module):
                                     dropout=dropout)]))
 
     def forward(self, x, mask, spatial_correction_matrix):
+        r"""
+        x: (L, H, W, C)
+        mask: (L)
+        spatial_correction_matrix: (M, 4, 4)
+        """
+
         C = int(x.shape[-1])
+
         # transform the features to the current timestamp
         # velocity, time_delay, infra
-        # (B,L,H,W,3)
-        prior_encoding = torch.narrow(x, 4, C-3, 3)
-        # (B,L,H,W,C)
-        x = torch.narrow(x, 4, 0, C-3)
+        # prior_encoding: (L, H, W, 3)
+        prior_encoding = torch.narrow(x, 3, C-3, 3)
+
+        # x: (L, H, W, C)
+        x = torch.narrow(x, 3, 0, C-3)
+
         if self.use_RTE:
-            # dt: (B,L)
-            dt = torch.select(torch.select(torch.select(prior_encoding, 4, 1), 3, 0), 2, 0).to(torch.int32)
+            # dt: (L)
+            dt = torch.select(torch.select(torch.select(prior_encoding, 3, 1), 2, 0), 1, 0).to(torch.int32)
             x = self.rte(x, dt)
+
+        # x: (L, H, W, C)
         x = self.sttf(x, spatial_correction_matrix)
+
+        # probably throwing an error if not self.use_roi_mask -> mask: (L, 1, 1, 1)
+        # mask: (H, W, 1, L)
         com_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(
             3) if not self.use_roi_mask else get_roi_and_cav_mask(x,
                                                                   mask,
@@ -198,6 +225,7 @@ class V2XTEncoder(nn.Module):
                                                                   self.downsample_rate)
         for layer in self.layers:
             x = layer[0](x, mask=com_mask, prior_encoding=prior_encoding)
+            # x: (L, H, W, C)
             x = layer[1](x) + x
         return x
 
@@ -210,6 +238,14 @@ class V2XTransformer(nn.Module):
         self.encoder = V2XTEncoder(encoder_args)
 
     def forward(self, x, mask, spatial_correction_matrix):
+        r"""
+        x: (L, H, W, C)
+        mask: (L)
+        spatial_correction_matrix: (M, 4, 4) where M is the max_cav
+        """
         output = self.encoder(x, mask, spatial_correction_matrix)
-        output = torch.select(output, 1, 0)
+        # output: (L, H, W, C)
+
+        output = torch.select(output, 0, 0)
+        # output: (H, W, C)
         return output

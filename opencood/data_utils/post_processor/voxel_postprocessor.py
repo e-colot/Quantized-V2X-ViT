@@ -269,11 +269,17 @@ class VoxelPostprocessor(BasePostprocessor):
 
             # classification probability
             prob = output_dict[cav_id]['psm']
+            if prob.dim() == 3:
+                # batch dimension was collapsed
+                prob = prob.unsqueeze(0)
             prob = F.sigmoid(prob.permute(0, 2, 3, 1))
             prob = prob.reshape(1, -1)
 
             # regression map
             reg = output_dict[cav_id]['rm']
+            if reg.dim() == 3:
+                # batch dimension was collapsed
+                reg = reg.unsqueeze(0)
 
             # convert regression map back to bounding box
             # (N, W*L*anchor_num, 7)

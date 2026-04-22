@@ -18,26 +18,25 @@ def regroup(dense_feature: torch.Tensor, record_len: torch.Tensor, max_len: int)
     Returns
     -------
     regroup_feature : torch.Tensor
-        B, L, C, H, W
+        L, C, H, W
     mask : torch.Tensor
-        B, L
+        L
     """
-    B = record_len.shape[0]
     L = max_len
     device = 'cuda'
     dtype = dense_feature.dtype
 
-    # binary mask (B, L)
-    lp_indices = torch.arange(L, device=device, dtype=torch.int32).view(1, L).expand(B, L)
-    mask = lp_indices < record_len.unsqueeze(1) # [B, L]
+    # binary mask (L)
+    lp_indices = torch.arange(L, device=device, dtype=torch.int32)
+    mask = lp_indices < record_len[0] # (L)
 
     # flatten dense features to [N, V] where V = C*H*W
     dense_flat = dense_feature.view(dense_feature.shape[0], -1)
     V = dense_flat.shape[1]
 
-    regroup_features = dense_flat.view(B, L, V)
+    regroup_features = dense_flat.view(L, V)
     
     regroup_features = regroup_features * mask.unsqueeze(-1).to(dtype)
-    regroup_features = regroup_features.view(B, L, dense_feature.shape[1], dense_feature.shape[2], dense_feature.shape[3])
+    regroup_features = regroup_features.view(L, dense_feature.shape[1], dense_feature.shape[2], dense_feature.shape[3])
 
     return regroup_features, mask.to(dtype)
