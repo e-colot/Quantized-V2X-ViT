@@ -2,11 +2,14 @@
 import torch
 import torch_tensorrt
 import os
+import onnx
+import onnxsim
+import tensorrt as trt
 
 from opencood.utils import build_utils
 
 
-def _build_torchscript(model, inputs, opt, ts, hypes):
+def _build_torchscript(model, inputs, opt, ts_opt, hypes):
     print("Tracing model to TorchScript")
     traced_model = torch.jit.trace(model, inputs)
     traced_path = os.path.join(opt.model_dir, "TS_graph.log")
@@ -20,7 +23,7 @@ def _build_torchscript(model, inputs, opt, ts, hypes):
     print("Compiling TorchScript traced model to TensorRT engine")
     trt_model = torch_tensorrt.compile(
         traced_model,
-        inputs=ts['trt_inputs'],
+        inputs=ts_opt['trt_inputs'],
         enabled_precisions={torch.float32},
         truncate_long_and_double=False,
         require_full_compilation=True,
@@ -35,6 +38,75 @@ def _build_torchscript(model, inputs, opt, ts, hypes):
     torch.jit.save(trt_model, save_path)
     print(f'Engine stored in {save_path}')
 
+def _build_onnx(model, inputs, opt, onnx_opt, hypes):
+    print('ONNX generation')
+    
+    dataset_type = hypes['validate_dir'].split('/')[-1]
+    onnx_path = os.path.join(opt.model_dir, dataset_type + '.onnx')
+    engine_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.engine')
+
+    with torch.no_grad():
+        torch.onnx.export(
+            model,
+            inputs,
+            onnx_path,
+            input_names=onnx_opt['input_names'],
+            output_names=onnx_opt['output_names'],
+            dynamic_axes=onnx_opt['dynamic_axes'],
+            opset_version=17,
+            do_constant_folding=True,
+            export_params=True,
+        )
+
+    print('ONNX validation')
+    onnx_model = onnx.load(onnx_path)
+    onnx.checker.check_model(onnx_model)
+
+    print('ONNX simplification')
+    simplified, check_ok = onnxsim.simplify(onnx_model)
+    if check_ok:
+        onnx.save(simplified, onnx_path)
+        print("Simplification successful, saved simplified model")
+    else:
+        print("[WARNING-ONNX] onnxsim check failed, using original ONNX")
+    print(f"{'-'*63}")
+    
+    print("Compiling ONNX model to TensorRT engine")
+
+    trt_logger = trt.Logger(trt.Logger.WARNING)
+    with trt.Builder(trt_logger) as builder, \
+         builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)) as network, \
+         trt.OnnxParser(network, trt_logger) as parser_trt, \
+         builder.create_builder_config() as config:
+
+        # Memory pool
+        config.set_memory_pool_limit(
+            trt.MemoryPoolType.WORKSPACE,
+            8 * (1 << 30)
+        )
+
+        # Parse ONNX
+        with open(onnx_path, 'rb') as f:
+            if not parser_trt.parse(f.read()):
+                for i in range(parser_trt.num_errors):
+                    print(f"[WARNING-ONNX] parse error {i}: {parser_trt.get_error(i)}")
+                raise RuntimeError("[ERROR-ONNX] parsing failed")
+        print("ONNX parsed successfully")
+
+        profile = build_utils.build_onnx_profile(builder, onnx_opt['shapes'])
+        config.add_optimization_profile(profile)
+
+        # Build
+        print("Compiling engine")
+        serialized_engine = builder.build_serialized_network(network, config)
+        if serialized_engine is None:
+            raise RuntimeError("[ERROR-ONNX] Engine build failed — check TRT_LOGGER output above")
+
+        with open(engine_path, 'wb') as f:
+            f.write(serialized_engine)
+            print(f"\n{'='*15} ENGINE SUCCESSFULLY BUILT {'='*15}")
+            print(f'Engine stored in {engine_path}')
+
 
 def main(parser_opt=None):
     torch.manual_seed(0)
@@ -42,12 +114,14 @@ def main(parser_opt=None):
     torch.backends.cudnn.allow_tf32 = False
 
     model, hypes, opt, parser_opt = build_utils.load_model(parser_opt)
-    inputs, ts, onnx = build_utils.build_inputs(hypes)
+    inputs, ts_opt, onnx_opt = build_utils.build_inputs(hypes)
 
     print(f"\n{'='*15} BUILDING TRT ENGINE {'='*15}")
 
     if parser_opt.type == 'torchscript':
-        _build_torchscript(model, inputs, opt, ts, hypes)
+        _build_torchscript(model, inputs, opt, ts_opt, hypes)
+    elif parser_opt.type == 'onnx':
+        _build_onnx(model, inputs, opt, onnx_opt, hypes)
     
     print('-' * 52)
 

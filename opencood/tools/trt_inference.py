@@ -3,9 +3,10 @@ from tqdm import tqdm
 
 import torch
 import torch_tensorrt
+import tensorrt as trt
 from torch.utils.data import DataLoader
 
-from opencood.tools import train_utils, inference_utils, build
+from opencood.tools import train_utils, inference_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils, trt_utils
 
@@ -25,21 +26,24 @@ def main():
                              pin_memory=False,
                              drop_last=False)
 
-    print('Loading TensorRT engine')
+    print(f"\n{'='*15} ENGINE LOADING {'='*15}")
     dataset_type = hypes['validate_dir'].split('/')[-1]
-    engine_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.pt')
-    try:
-        model = torch.jit.load(engine_path).cuda()
-    except:
-        build(modelName)
-        model = torch.jit.load(engine_path).cuda()
+
+    if parser_opt.type == 'torchscript':
+        engine_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.pt')
+        try:
+            model = torch.jit.load(engine_path).cuda()
+        except:
+            print('[ERROR] Unable to load the TorchScript-based model')
+    elif parser_opt.type == 'onnx':
+        engine_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.engine')
+        try:
+            model = trt_utils.TRTEngineWrapper(engine_path)
+        except:
+            print('[ERROR] Unable to load the ONNX-based model')
+
 
     device = torch.device('cuda')
-
-    # print('Loading Model from checkpoint')
-    # saved_path = opt.model_dir
-    # _, model = train_utils.load_saved_model(saved_path, model)
-    # model.eval()
 
     # Create the dictionary for evaluation.
     # also store the confidence score for each prediction

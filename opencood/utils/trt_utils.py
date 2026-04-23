@@ -1,5 +1,7 @@
 import argparse
 import opencood.hypes_yaml.yaml_utils as yaml_utils
+import tensorrt as trt
+import torch
 
 
 def _parser():
@@ -52,3 +54,49 @@ def load_params(parser_opt=None):
     return hypes, opt, parser_opt
 
 
+class TRTEngineWrapper:
+    def __init__(self, engine_path):
+        self.logger = trt.Logger(trt.Logger.WARNING)
+        with open(engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
+            self.engine = runtime.deserialize_cuda_engine(f.read())
+        
+        self.context = self.engine.create_execution_context()
+        
+        self.torch_stream = torch.cuda.Stream()
+        self.stream = self.torch_stream.cuda_stream
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def forward(self, voxel_features, voxel_coords, voxel_num_points, record_len, 
+                spatial_correction_matrix, prior_encoding):
+        
+        feed_dict = {
+            'voxel_features': voxel_features,
+            'voxel_coords': voxel_coords,
+            'voxel_num_points': voxel_num_points,
+            'record_len': record_len,
+            'spatial_correction_matrix': spatial_correction_matrix,
+            'prior_encoding': prior_encoding
+        }
+
+        outputs = {}
+        for i in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(i)
+            
+            if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                # Set input address and shape
+                self.context.set_input_shape(name, feed_dict[name].shape)
+                self.context.set_tensor_address(name, feed_dict[name].data_ptr())
+            else:
+                # Get output shape and allocate buffer
+                shape = self.context.get_tensor_shape(name)
+                out_tensor = torch.empty(tuple(shape), device="cuda", dtype=torch.float32)
+                outputs[name] = out_tensor
+                self.context.set_tensor_address(name, out_tensor.data_ptr())
+
+        with torch.cuda.stream(self.torch_stream):
+            self.context.execute_async_v3(stream_handle=self.stream)
+            self.torch_stream.synchronize()
+        
+        return outputs['psm'], outputs['rm']

@@ -85,5 +85,33 @@ def build_inputs(hypes):
         "voxel_coords":     {0: "num_pillars"},
         "voxel_num_points": {0: "num_pillars"},
     }
+    onnx['shapes'] = shapes
 
     return inputs, torchscript, onnx
+
+def build_onnx_profile(builder, shapes):
+
+    # Extract shapes for voxel_features, voxel_coords, voxel_num_points
+    vf_min = shapes['ranges']['voxel_features']['min']
+    vf_opt = shapes['ranges']['voxel_features']['opt']
+    vf_max = shapes['ranges']['voxel_features']['max']
+    vc_min = shapes['ranges']['voxel_coords']['min']
+    vc_opt = shapes['ranges']['voxel_coords']['opt']
+    vc_max = shapes['ranges']['voxel_coords']['max']
+    vnp_min = shapes['ranges']['voxel_num_points']['min']
+    vnp_opt = shapes['ranges']['voxel_num_points']['opt']
+    vnp_max = shapes['ranges']['voxel_num_points']['max']
+    max_cavs = shapes['ranges']['spatial_correction_matrix']['max'][1]
+
+    # Optimization profile for dynamic pillar dimension
+    profile = builder.create_optimization_profile()
+    profile.set_shape("voxel_features",   vf_min,  vf_opt,  vf_max)
+    profile.set_shape("voxel_coords",      vc_min,  vc_opt,  vc_max)
+    profile.set_shape("voxel_num_points",  vnp_min, vnp_opt, vnp_max)
+    # Fixed-shape inputs — min=opt=max
+    profile.set_shape("record_len",               [1],              [1],              [1])
+    profile.set_shape("spatial_correction_matrix",[1,max_cavs,4,4],[1,max_cavs,4,4],[1,max_cavs,4,4])
+    profile.set_shape("prior_encoding",           [1,max_cavs,3],  [1,max_cavs,3],  [1,max_cavs,3])
+
+    return profile
+
