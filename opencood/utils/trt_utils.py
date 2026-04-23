@@ -6,9 +6,8 @@ import torch
 
 def _parser():
     parser = argparse.ArgumentParser(description="Model selector")
-    parser.add_argument('--model', type=str,
-                        required=True)
-    parser.add_argument('--type', type=str, default='torchscript')
+    parser.add_argument('--model', type=str, default='v2xvit')
+    parser.add_argument('--type', type=str, default='onnx')
     opt = parser.parse_args()
     return opt
 
@@ -16,6 +15,10 @@ class _Arguments:
     def __init__(self, modelName):
         print('Default parameters used')
         self.model_name = modelName
+        self.show_vis = False
+        self.show_sequence = False
+        self.save_vis = False
+        self.save_npy = False
         self.global_sort_detections = False
         self.fusion_method = 'intermediate'
         if modelName == "v2xvit":
@@ -39,7 +42,8 @@ def load_params(parser_opt=None):
     
     valid_compiler_type = {
         "torchscript",
-        "onnx"
+        "onnx",
+        "pytorch"
     }
     if parser_opt.type not in valid_compiler_type:
         raise ValueError(f"Invalid TRT_STAGE={parser_opt.type}. Use one of {sorted(valid_compiler_type)}")

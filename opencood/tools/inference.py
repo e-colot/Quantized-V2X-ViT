@@ -2,7 +2,9 @@
 # Author: Runsheng Xu <rxx3386@ucla.edu>, Hao Xiang <haxiang@g.ucla.edu>, Yifan Lu <yifan_lu@sjtu.edu.cn>
 # License: TDG-Attribution-NonCommercial-NoDistrib
 
-
+import os
+import time
+import open3d as o3d
 from tqdm import tqdm
 
 import torch
@@ -11,6 +13,7 @@ from torch.utils.data import DataLoader
 from opencood.tools import train_utils, inference_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils, trt_utils
+from opencood.visualization import vis_utils
 
 def main():
     hypes, opt, parser_opt = trt_utils.load_params()
@@ -43,6 +46,23 @@ def main():
     result_stat = {0.3: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
                    0.5: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
                    0.7: {'tp': [], 'fp': [], 'gt': 0, 'score': []}}
+    
+    if opt.show_sequence:
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
+
+        vis.get_render_option().background_color = [0.05, 0.05, 0.05]
+        vis.get_render_option().point_size = 1.0
+        vis.get_render_option().show_coordinate_frame = True
+
+        # used to visualize lidar points
+        vis_pcd = o3d.geometry.PointCloud()
+        # used to visualize object bounding box, maximum 50
+        vis_aabbs_gt = []
+        vis_aabbs_pred = []
+        for _ in range(50):
+            vis_aabbs_gt.append(o3d.geometry.LineSet())
+            vis_aabbs_pred.append(o3d.geometry.LineSet())
 
     progress_bar = tqdm(data_loader,
                         total=len(data_loader),
@@ -87,11 +107,71 @@ def main():
                                        gt_box_tensor,
                                        result_stat,
                                        0.7)
+            if opt.save_npy:
+                npy_save_path = os.path.join(opt.model_dir, 'npy')
+                if not os.path.exists(npy_save_path):
+                    os.makedirs(npy_save_path)
+                inference_utils.save_prediction_gt(pred_box_tensor,
+                                                   gt_box_tensor,
+                                                   batch_data['ego'][
+                                                       'origin_lidar'][0],
+                                                   i,
+                                                   npy_save_path)
+
+            if opt.show_vis or opt.save_vis:
+                vis_save_path = ''
+                if opt.save_vis:
+                    vis_save_path = os.path.join(opt.model_dir, 'vis')
+                    if not os.path.exists(vis_save_path):
+                        os.makedirs(vis_save_path)
+                    vis_save_path = os.path.join(vis_save_path, '%05d.png' % i)
+
+                opencood_dataset.visualize_result(pred_box_tensor,
+                                                  gt_box_tensor,
+                                                  batch_data['ego'][
+                                                      'origin_lidar'],
+                                                  opt.show_vis,
+                                                  vis_save_path,
+                                                  dataset=opencood_dataset)
+
+            if opt.show_sequence:
+                pcd, pred_o3d_box, gt_o3d_box = \
+                    vis_utils.visualize_inference_sample_dataloader(
+                        pred_box_tensor,
+                        gt_box_tensor,
+                        batch_data['ego']['origin_lidar'],
+                        vis_pcd,
+                        mode='constant'
+                        )
+                if i == 0:
+                    vis.add_geometry(pcd)
+                    vis_utils.linset_assign_list(vis,
+                                                 vis_aabbs_pred,
+                                                 pred_o3d_box,
+                                                 update_mode='add')
+
+                    vis_utils.linset_assign_list(vis,
+                                                 vis_aabbs_gt,
+                                                 gt_o3d_box,
+                                                 update_mode='add')
+
+                vis_utils.linset_assign_list(vis,
+                                             vis_aabbs_pred,
+                                             pred_o3d_box)
+                vis_utils.linset_assign_list(vis,
+                                             vis_aabbs_gt,
+                                             gt_o3d_box)
+                vis.update_geometry(pcd)
+                vis.poll_events()
+                vis.update_renderer()
+                time.sleep(0.001)
 
     eval_utils.eval_final_results(result_stat,
                                   opt.model_dir,
                                   opt.global_sort_detections,
                                   hypes['validate_dir'])
+    if opt.show_sequence:
+        vis.destroy_window()
 
 
 if __name__ == '__main__':

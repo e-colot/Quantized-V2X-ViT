@@ -122,6 +122,8 @@ def main(parser_opt=None):
         _build_torchscript(model, inputs, opt, ts_opt, hypes)
     elif parser_opt.type == 'onnx':
         _build_onnx(model, inputs, opt, onnx_opt, hypes)
+    else:
+        raise NotImplementedError(f"Cannot build with slected type: {parser_opt.type}")
     
     print('-' * 52)
 
