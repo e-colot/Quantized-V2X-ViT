@@ -33,17 +33,15 @@ def _build_torchscript(model, inputs, opt, ts_opt, hypes):
     )
     print(f"\n{'='*15} ENGINE SUCCESSFULLY BUILT {'='*15}")
 
-    dataset_type = hypes['validate_dir'].split('/')[-1]
-    save_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.pt')
+    save_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.pt')
     torch.jit.save(trt_model, save_path)
     print(f'Engine stored in {save_path}')
 
 def _build_onnx(model, inputs, opt, onnx_opt, hypes):
     print('ONNX generation')
     
-    dataset_type = hypes['validate_dir'].split('/')[-1]
-    onnx_path = os.path.join(opt.model_dir, dataset_type + '.onnx')
-    engine_path = os.path.join(opt.model_dir, "trt_" + dataset_type + '.engine')
+    onnx_path = os.path.join(opt.model_dir, hypes['dataset'] + '.onnx')
+    engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.engine')
 
     with torch.no_grad():
         torch.onnx.export(
@@ -123,7 +121,7 @@ def main(parser_opt=None):
     elif parser_opt.type == 'onnx':
         _build_onnx(model, inputs, opt, onnx_opt, hypes)
     else:
-        raise NotImplementedError(f"Cannot build with slected type: {parser_opt.type}")
+        raise NotImplementedError(f"Cannot build with selected type: {parser_opt.type}")
     
     print('-' * 52)
 

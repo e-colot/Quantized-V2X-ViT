@@ -55,6 +55,8 @@ def load_params(parser_opt=None):
     # for convenient shape logs naming
     hypes['name'] = parser_opt.model
 
+    hypes['dataset'] = hypes['validate_dir'].split('/')[-1]
+
     return hypes, opt, parser_opt
 
 

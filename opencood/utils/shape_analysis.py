@@ -77,9 +77,8 @@ def analyze_shape(hypes):
         'prior_encoding',
     ]
 
-    dataset_type = hypes['validate_dir'].split('/')[-1]
     model = hypes['name']
-    shape_file_name = os.path.join('opencood/logs/shapes/', model + '_' + dataset_type + '.log')
+    shape_file_name = os.path.join('opencood/logs/shapes/', model + '_' + hypes['dataset'] + '.log')
 
     print(f"\n{'=' * 15} SHAPE ANALYSIS {'=' * 15}")
     # If shape_file_name exists, load and return its contents

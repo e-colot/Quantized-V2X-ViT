@@ -29,17 +29,42 @@ def main():
                              pin_memory=False,
                              drop_last=False)
 
-    print('Creating Model')
-    model = train_utils.create_model(hypes)
-    # we assume gpu is necessary
-    if torch.cuda.is_available():
-        model.cuda()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"\n{'='*15} MODEL LOADING {'='*15}")
 
-    print('Loading Model from checkpoint')
-    saved_path = opt.model_dir
-    _, model = train_utils.load_saved_model(saved_path, model)
-    model.eval()
+    if parser_opt.type == 'torchscript':
+        engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.pt')
+        try:
+            model = torch.jit.load(engine_path).cuda()
+            print("Loaded the TorchScript-based model:")
+            print(f"    {engine_path}")
+        except:
+            raise ModuleNotFoundError(f"Unable to load the TorchScript-based model in {engine_path}")
+    elif parser_opt.type == 'onnx':
+        engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.engine')
+        try:
+            model = trt_utils.TRTEngineWrapper(engine_path)
+            print("Loaded the ONNX-based model:")
+            print(f"    {engine_path}")
+        except:
+            raise ModuleNotFoundError(f"Unable to load the ONNX-based model in {engine_path}")
+    elif parser_opt.type == 'pytorch':
+        try:
+            model = train_utils.create_model(hypes)
+            if torch.cuda.is_available():
+                model.cuda()
+            print('Loading Model from checkpoint')
+            saved_path = opt.model_dir
+            _, model = train_utils.load_saved_model(saved_path, model)
+            model.eval()
+            print("Loaded the PyTorch model:")
+            print(f"    {saved_path}")
+        except:
+            raise ModuleNotFoundError(f"Unable to load the PyTorch model in {saved_path}")
+    else:
+        raise NotImplementedError(f"Cannot run inference with selected type: {parser_opt.type}")
+    print(f"{'-' * 52}\n")
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Create the dictionary for evaluation.
     # also store the confidence score for each prediction
@@ -169,7 +194,8 @@ def main():
     eval_utils.eval_final_results(result_stat,
                                   opt.model_dir,
                                   opt.global_sort_detections,
-                                  hypes['validate_dir'])
+                                  parser_opt, 
+                                  hypes)
     if opt.show_sequence:
         vis.destroy_window()
 
