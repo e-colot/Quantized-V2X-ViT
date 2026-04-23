@@ -2,19 +2,16 @@
 # Author: Runsheng Xu <rxx3386@ucla.edu>, Hao Xiang <haxiang@g.ucla.edu>, Yifan Lu <yifan_lu@sjtu.edu.cn>
 # License: TDG-Attribution-NonCommercial-NoDistrib
 
-
-import argparse
 import os
 from tqdm import tqdm
 import numpy as np
-import matplotlib.pyplot as plt
 
 import torch
 import torch_tensorrt
 from torch.utils.data import DataLoader
 
-import opencood.hypes_yaml.yaml_utils as yaml_utils
-from opencood.tools import train_utils, build
+from opencood.tools import train_utils
+from opencood.utils import trt_utils, build
 from opencood.data_utils.datasets import build_dataset
 
 
@@ -73,41 +70,8 @@ def _batch_relative_snr(torch_out, trt_out):
     snr = 20 * torch.log10(torch.norm(torch_out) / (torch.norm(noise)+eps))
     return snr.item()
 
-
-def parser():
-    parser = argparse.ArgumentParser(description="Model selector")
-    parser.add_argument('--model', type=str,
-                        required=True)
-    opt = parser.parse_args()
-    return str(opt.model)
-
-class Arguments:
-    def __init__(self, modelName):
-        print('Default parameters used')
-        self.show_vis = False
-        self.show_sequence = False
-        self.save_vis = False
-        self.save_npy = False
-        self.global_sort_detections = False
-        self.fusion_method = 'intermediate'
-        if modelName == "v2xvit":
-            self.model_dir = 'opencood/logs/v2x-vit'
-        elif modelName == "ppif":
-            self.model_dir = 'opencood/logs/pointPillarIntermediateFusion'
-
 def main():
-    modelName = parser()
-    valid_model_names = {
-        "v2xvit",
-        "ppif" # point pillar intermediate fusion
-    }
-
-    if modelName not in valid_model_names:
-        raise ValueError(f"Invalid TRT_STAGE={modelName}. Use one of {sorted(valid_model_names)}")
-    
-    opt = Arguments(modelName)
-
-    hypes = yaml_utils.load_yaml(None, opt)
+    hypes, opt, parser_opt = trt_utils.load_params()
 
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False)
@@ -121,7 +85,7 @@ def main():
                              drop_last=False)
     
     print('Calling TensorRT builder')
-    build.main(modelName)
+    build.main(parser_opt)
 
     print('Loading TensorRT engine')
     dataset_type = hypes['validate_dir'].split('/')[-1]
