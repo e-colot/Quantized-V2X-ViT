@@ -60,6 +60,19 @@ def _batch_relative_l2_error(torch_output, trt_output, eps=1e-12):
     rel_l2 = torch.linalg.norm(torch_flat - trt_flat) / (denom + eps)
     return rel_l2.item()
 
+def _batch_relative_snr(torch_out, trt_out):
+    eps = 1e-12
+    torch_flat = _flatten_concat(torch_out)
+    trt_flat = _flatten_concat(trt_out)
+
+    if torch_flat.numel() != trt_flat.numel():
+        raise RuntimeError(
+            f'Flattened output size mismatch: {torch_flat.numel()} vs {trt_flat.numel()}'
+        )
+    noise = torch_out - trt_out
+    snr = 20 * torch.log10(torch.norm(torch_out) / (torch.norm(noise)+eps))
+    return snr.item()
+
 
 def parser():
     parser = argparse.ArgumentParser(description="Model selector")
@@ -128,7 +141,7 @@ def main():
     _, model = train_utils.load_saved_model(saved_path, model)
     model.eval()
 
-    rel_l2_history = []
+    rel_snr_history = []
 
     progress_bar = tqdm(data_loader,
                         total=len(data_loader),
@@ -154,24 +167,22 @@ def main():
             trtOutput = trt_model(voxel_features, voxel_coords, voxel_num_points, record_len, 
                         spatial_correction_matrix, prior_encoding)
 
-            batch_rel_l2 = _batch_relative_l2_error(torchOutput, trtOutput)
-            rel_l2_history.append(batch_rel_l2)
+            batch_rel_snr = _batch_relative_snr(torchOutput, trtOutput)
+            rel_snr_history.append(batch_rel_snr)
 
-            running_rel_l2 = float(np.mean(rel_l2_history))
-            progress_bar.set_postfix(
-                batch_rel_l2=f'{batch_rel_l2:.3e}',
-                running_rel_l2=f'{running_rel_l2:.3e}',
-            )
+            running_rel_snr = float(np.mean(rel_snr_history))
+            progress_bar.set_postfix(SNR=f'{running_rel_snr:<10.1f}')
 
-    if not rel_l2_history:
-        raise RuntimeError('No batches were processed; relative L2 history is empty.')
+    if not rel_snr_history:
+        raise RuntimeError('No batches were processed; SNR history is empty.')
 
-    print(
-        'Relative L2 summary: '
-        f'mean={np.mean(rel_l2_history):.6e}, '
-        f'median={np.median(rel_l2_history):.6e}, '
-        f'max={np.max(rel_l2_history):.6e}'
-    )
+    print(f"\n{'='*15} SNR SUMMARY {'='*15}")
+    print(f"{'Metric':<25} | {'Value':<10}")
+    print("-" * 63)
+    print(f"{'Mean  ':<25} | {np.mean(rel_snr_history):<10.3f} dB")
+    print(f"{'Median':<25} | {np.median(rel_snr_history):<10.3f} dB")
+    print(f"{'Max   ':<25} | {np.max(rel_snr_history):<10.3f} dB")
+    print("-" * 63)
 
 if __name__ == '__main__':
     main()

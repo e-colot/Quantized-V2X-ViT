@@ -122,6 +122,8 @@ def build_inputs(hypes):
 
 def main(opt=None):
     torch.manual_seed(0)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
     model, hypes, opt = load_model(opt)
     inputs, trt_inputs = build_inputs(hypes)

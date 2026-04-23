@@ -267,16 +267,16 @@ class VoxelPostprocessor(BasePostprocessor):
             # (H, W, anchor_num, 7)
             anchor_box = cav_content['anchor_box']
 
-            # classification probability
-            prob = output_dict[cav_id]['psm']
+            # classification probability, dtype safeguard
+            prob = output_dict[cav_id]['psm'].to(torch.float32)
             if prob.dim() == 3:
                 # batch dimension was collapsed
                 prob = prob.unsqueeze(0)
             prob = F.sigmoid(prob.permute(0, 2, 3, 1))
             prob = prob.reshape(1, -1)
 
-            # regression map
-            reg = output_dict[cav_id]['rm']
+            # regression map, dtype safeguard
+            reg = output_dict[cav_id]['rm'].to(torch.float32)
             if reg.dim() == 3:
                 # batch dimension was collapsed
                 reg = reg.unsqueeze(0)

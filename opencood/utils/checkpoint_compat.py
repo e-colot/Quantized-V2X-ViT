@@ -219,4 +219,11 @@ def print_remap_report(report: Dict[str, Any], max_items: int = 10):
     print(f"{'Unknown keys skipped':<32} | {len(skipped_unknown):<16}")
     print(f"{'Shape mismatches':<32} | {len(shape_mismatch):<16}")
     print(f"{'Missing model keys':<32} | {len(missing_in_checkpoint):<16}")
+
+    # Verbosity for debugging mismatches
+    if load_ratio < 100.0:
+        _print_samples("SHAPE MISMATCHES", shape_mismatch, max_items)
+        _print_samples("MISSING MODEL KEYS (Not found in checkpoint)", missing_in_checkpoint, max_items)
+        _print_samples("SKIPPED UNKNOWN (Checkpoint keys not in model)", skipped_unknown, max_items)
+
     print('-' * 52)
