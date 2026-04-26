@@ -152,7 +152,7 @@ def calculate_ap(result_stat, iou, global_sort_detections):
     return ap, mrec, mprec
 
 
-def eval_final_results(result_stat, save_path, global_sort_detections, parser_opt, hypes):
+def eval_final_results(result_stat, save_path, global_sort_detections, opt):
     dump_dict = {}
 
     ap_30, mrec_30, mpre_30 = calculate_ap(result_stat, 0.30, global_sort_detections)
@@ -178,7 +178,7 @@ def eval_final_results(result_stat, save_path, global_sort_detections, parser_op
     if os.path.exists(baseline_path):
         try:
             baseline_eval = yaml_utils.load_yaml(baseline_path)
-            baseline_eval = baseline_eval.get(hypes['dataset'])
+            baseline_eval = baseline_eval.get(opt.dataset)
 
             baseline_values = {
                 'ap30': baseline_eval.get('ap30'),
@@ -210,6 +210,6 @@ def eval_final_results(result_stat, save_path, global_sort_detections, parser_op
     print(f"{'Avg Precision @ IOU 0.5':<25} | {ap_50:<10.4f} | {baseline_comparison['ap_50']:<20}")
     print(f"{'Avg Precision @ IOU 0.7':<25} | {ap_70:<10.4f} | {baseline_comparison['ap_70']:<20}")
     print("-" * 63)
-    print(f"{'Model':<30} | {parser_opt.model}")
-    print(f"{'Dataset':<30} | {hypes['dataset']}")
+    print(f"{'Model':<30} | {opt.model}")
+    print(f"{'Dataset':<30} | {opt.dataset}")
     print("-" * 63)

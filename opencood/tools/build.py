@@ -9,7 +9,7 @@ import tensorrt as trt
 from opencood.utils import build_utils
 
 
-def _build_torchscript(model, inputs, opt, ts_opt, hypes):
+def _build_torchscript(model, inputs, opt, ts_opt):
     print("Tracing model to TorchScript")
     traced_model = torch.jit.trace(model, inputs)
     traced_path = os.path.join(opt.model_dir, "TS_graph.log")
@@ -33,15 +33,15 @@ def _build_torchscript(model, inputs, opt, ts_opt, hypes):
     )
     print(f"\n{'='*15} ENGINE SUCCESSFULLY BUILT {'='*15}")
 
-    save_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.pt')
+    save_path = os.path.join(opt.model_dir, "trt_" + opt.dataset + '.pt')
     torch.jit.save(trt_model, save_path)
     print(f'Engine stored in {save_path}')
 
-def _build_onnx(model, inputs, opt, onnx_opt, hypes):
+def _build_onnx(model, inputs, opt, onnx_opt):
     print('ONNX generation')
     
-    onnx_path = os.path.join(opt.model_dir, hypes['dataset'] + '.onnx')
-    engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.engine')
+    onnx_path = os.path.join(opt.model_dir, opt.dataset + '.onnx')
+    engine_path = os.path.join(opt.model_dir, "trt_" + opt.dataset + '.engine')
 
     with torch.no_grad():
         torch.onnx.export(
@@ -51,7 +51,7 @@ def _build_onnx(model, inputs, opt, onnx_opt, hypes):
             input_names=onnx_opt['input_names'],
             output_names=onnx_opt['output_names'],
             dynamic_axes=onnx_opt['dynamic_axes'],
-            opset_version=17,
+            opset_version=23, # FP4 supported for opset >= 23
             do_constant_folding=True,
             export_params=True,
         )
@@ -106,22 +106,22 @@ def _build_onnx(model, inputs, opt, onnx_opt, hypes):
             print(f'Engine stored in {engine_path}')
 
 
-def main(parser_opt=None):
+def main():
     torch.manual_seed(0)
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
 
-    model, hypes, opt, parser_opt = build_utils.load_model(parser_opt)
+    model, hypes, opt = build_utils.load_model()
     inputs, ts_opt, onnx_opt = build_utils.build_inputs(hypes)
 
     print(f"\n{'='*15} BUILDING TRT ENGINE {'='*15}")
 
-    if parser_opt.type == 'torchscript':
-        _build_torchscript(model, inputs, opt, ts_opt, hypes)
-    elif parser_opt.type == 'onnx':
-        _build_onnx(model, inputs, opt, onnx_opt, hypes)
+    if opt.type == 'torchscript':
+        _build_torchscript(model, inputs, opt, ts_opt)
+    elif opt.type == 'onnx':
+        _build_onnx(model, inputs, opt, onnx_opt)
     else:
-        raise NotImplementedError(f"Cannot build with selected type: {parser_opt.type}")
+        raise NotImplementedError(f"Cannot build with selected type: {opt.type}")
     
     print('-' * 52)
 

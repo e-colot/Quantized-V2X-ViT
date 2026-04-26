@@ -51,22 +51,6 @@ def _infer_linked_dimensions(shape_dict):
                 linked.append({'type': 'equal', 'dims': [lhs_key, rhs_key]})
     return linked
 
-
-class Arguments:
-    def __init__(self, model_name):
-        self.show_vis = False
-        self.show_sequence = False
-        self.save_vis = False
-        self.save_npy = False
-        self.global_sort_detections = False
-        self.fusion_method = 'intermediate'
-        if model_name == 'v2xvit':
-            self.model_dir = 'opencood/logs/v2x-vit'
-        elif model_name == 'ppif':
-            self.model_dir = 'opencood/logs/pointPillarIntermediateFusion'
-        else:
-            raise ValueError(f'Unsupported model: {model_name}')
-
 def analyze_shape(hypes):
     shape_names = [
         'voxel_features',

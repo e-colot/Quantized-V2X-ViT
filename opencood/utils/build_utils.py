@@ -5,8 +5,8 @@ from opencood.utils import shape_analysis, trt_utils
 from opencood.tools import train_utils
 
 
-def load_model(parser_opt=None):
-    hypes, opt, parser_opt = trt_utils.load_params(parser_opt)
+def load_model():
+    hypes, opt = trt_utils.load_params()
 
     print('Creating Model')
     model = train_utils.create_model(hypes)
@@ -15,7 +15,7 @@ def load_model(parser_opt=None):
     saved_path = opt.model_dir
     _, model = train_utils.load_saved_model(saved_path, model)
 
-    return model.eval().cuda(), hypes, opt, parser_opt
+    return model.eval().cuda(), hypes, opt
 
 def build_inputs(hypes):
     shapes = shape_analysis.analyze_shape(hypes)

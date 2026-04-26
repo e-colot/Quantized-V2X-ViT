@@ -16,7 +16,7 @@ from opencood.utils import eval_utils, trt_utils
 from opencood.visualization import vis_utils
 
 def main():
-    hypes, opt, parser_opt = trt_utils.load_params()
+    hypes, opt = trt_utils.load_params()
 
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False)
@@ -31,7 +31,7 @@ def main():
 
     print(f"\n{'='*15} MODEL LOADING {'='*15}")
 
-    if parser_opt.type == 'torchscript':
+    if opt.type == 'torchscript':
         engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.pt')
         try:
             model = torch.jit.load(engine_path).cuda()
@@ -39,7 +39,7 @@ def main():
             print(f"    {engine_path}")
         except:
             raise ModuleNotFoundError(f"Unable to load the TorchScript-based model in {engine_path}")
-    elif parser_opt.type == 'onnx':
+    elif opt.type == 'onnx':
         engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.engine')
         try:
             model = trt_utils.TRTEngineWrapper(engine_path)
@@ -47,7 +47,7 @@ def main():
             print(f"    {engine_path}")
         except:
             raise ModuleNotFoundError(f"Unable to load the ONNX-based model in {engine_path}")
-    elif parser_opt.type == 'pytorch':
+    elif opt.type == 'pytorch':
         try:
             model = train_utils.create_model(hypes)
             if torch.cuda.is_available():
@@ -61,7 +61,7 @@ def main():
         except:
             raise ModuleNotFoundError(f"Unable to load the PyTorch model in {saved_path}")
     else:
-        raise NotImplementedError(f"Cannot run inference with selected type: {parser_opt.type}")
+        raise NotImplementedError(f"Cannot run inference with selected type: {opt.type}")
     print(f"{'-' * 52}\n")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -194,8 +194,7 @@ def main():
     eval_utils.eval_final_results(result_stat,
                                   opt.model_dir,
                                   opt.global_sort_detections,
-                                  parser_opt, 
-                                  hypes)
+                                  opt)
     if opt.show_sequence:
         vis.destroy_window()
 
