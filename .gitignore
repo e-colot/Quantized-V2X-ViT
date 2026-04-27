@@ -144,3 +144,4 @@ tensorRT/**/*.engine
 tensorRT/**/*.ts
 tensorRT/**/*.plan
 tensorRT/**/*.trt
+opencood/**/test.py

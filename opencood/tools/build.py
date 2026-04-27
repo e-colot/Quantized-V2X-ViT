@@ -6,13 +6,13 @@ import onnx
 import onnxsim
 import tensorrt as trt
 
-from opencood.utils import build_utils
+from opencood.utils import build_utils, onnx_utils
 
 
 def _build_torchscript(model, inputs, opt, ts_opt):
     print("Tracing model to TorchScript")
     traced_model = torch.jit.trace(model, inputs)
-    traced_path = os.path.join(opt.model_dir, "TS_graph.log")
+    traced_path = os.path.join(opt.model_dir, "logs/TS_graph.log")
     with open(traced_path, "w") as f:
         graph = traced_model.graph.copy()
         torch._C._jit_pass_inline(graph)
@@ -40,8 +40,9 @@ def _build_torchscript(model, inputs, opt, ts_opt):
 def _build_onnx(model, inputs, opt, onnx_opt):
     print('ONNX generation')
     
-    onnx_path = os.path.join(opt.model_dir, opt.dataset + '.onnx')
+    onnx_path = os.path.join(opt.model_dir, "onnx/" + opt.dataset + '.onnx')
     engine_path = os.path.join(opt.model_dir, "trt_" + opt.dataset + '.engine')
+    log_path = os.path.join(opt.model_dir, "logs/" + opt.dataset + '_onnx.log')
 
     with torch.no_grad():
         torch.onnx.export(
@@ -65,6 +66,7 @@ def _build_onnx(model, inputs, opt, onnx_opt):
     if check_ok:
         onnx.save(simplified, onnx_path)
         print("Simplification successful, saved simplified model")
+        onnx_utils.log_onnx_structure(simplified, log_path)
     else:
         print("[WARNING-ONNX] onnxsim check failed, using original ONNX")
     print(f"{'-'*63}")
@@ -77,18 +79,21 @@ def _build_onnx(model, inputs, opt, onnx_opt):
          trt.OnnxParser(network, trt_logger) as parser_trt, \
          builder.create_builder_config() as config:
 
-        # Memory pool
-        config.set_memory_pool_limit(
-            trt.MemoryPoolType.WORKSPACE,
-            8 * (1 << 30)
-        )
-
-        # Parse ONNX
-        with open(onnx_path, 'rb') as f:
-            if not parser_trt.parse(f.read()):
+        print(f"Parsing ONNX file: {onnx_path}")
+        
+        if hasattr(parser_trt, 'parse_from_file'):
+            if not parser_trt.parse_from_file(onnx_path):
                 for i in range(parser_trt.num_errors):
-                    print(f"[WARNING-ONNX] parse error {i}: {parser_trt.get_error(i)}")
+                    print(f"[ERROR] {parser_trt.get_error(i)}")
                 raise RuntimeError("[ERROR-ONNX] parsing failed")
+        else:
+            # Fallback for older TRT versions
+            with open(onnx_path, 'rb') as f:
+                if not parser_trt.parse(f.read()):
+                    for i in range(parser_trt.num_errors):
+                        print(f"[ERROR] {parser_trt.get_error(i)}")
+                    raise RuntimeError("[ERROR-ONNX] parsing failed")
+
         print("ONNX parsed successfully")
 
         profile = build_utils.build_onnx_profile(builder, onnx_opt['shapes'])
