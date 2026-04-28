@@ -1,18 +1,9 @@
 name: opencood
 channels:
   - defaults
+  - conda-forge
 dependencies:
-  - pip==21.1.2
-  - python==3.7.11
+  - python=3.10
+  - pip
   - pip:
-    - matplotlib==3.4.2
-    - numpy
-    - open3d
-    - opencv-python==4.5.5.62
-    - cython
-    - pygame
-    - tensorboardX
-    - shapely==2.0.0
-    - einops
-    - cumm
-    - timm
+    - -r requirements.txt

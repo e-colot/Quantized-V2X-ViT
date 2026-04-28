@@ -16,7 +16,36 @@ from opencood.utils import eval_utils, trt_utils
 from opencood.visualization import vis_utils
 
 def main():
-    hypes, opt = trt_utils.load_params()
+    hypes, opt = trt_utils.load_params()    
+
+    if opt.type == 'torchscript':
+        print(f"\n{'='*15} MODEL LOADING {'='*15}")
+        hypes, opt = trt_utils.load_params()
+        engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.pt')
+        try:
+            model = torch.jit.load(engine_path).cuda()
+            print("Loaded the TorchScript-based model:")
+            print(f"    {engine_path}")
+        except:
+            raise ModuleNotFoundError(f"Unable to load the TorchScript-based model in {engine_path}")
+    elif opt.type == 'onnx':
+        print(f"\n{'='*15} MODEL LOADING {'='*15}")
+        hypes, opt = trt_utils.load_params()
+        engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.engine')
+        try:
+            model = trt_utils.TRTEngineWrapper(engine_path)
+            print("Loaded the ONNX-based model:")
+            print(f"    {engine_path}")
+        except:
+            raise ModuleNotFoundError(f"Unable to load the ONNX-based model in {engine_path}")
+    elif opt.type == 'pytorch':
+        try:
+            model, hypes, opt = trt_utils.load_model(hypes, opt)
+        except:
+            raise ModuleNotFoundError(f"Unable to load the PyTorch model")
+    else:
+        raise NotImplementedError(f"Cannot run inference with selected type: {opt.type}")
+    print(f"{'-' * 52}\n")
 
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False)
@@ -28,41 +57,6 @@ def main():
                              shuffle=False,
                              pin_memory=False,
                              drop_last=False)
-
-    print(f"\n{'='*15} MODEL LOADING {'='*15}")
-
-    if opt.type == 'torchscript':
-        engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.pt')
-        try:
-            model = torch.jit.load(engine_path).cuda()
-            print("Loaded the TorchScript-based model:")
-            print(f"    {engine_path}")
-        except:
-            raise ModuleNotFoundError(f"Unable to load the TorchScript-based model in {engine_path}")
-    elif opt.type == 'onnx':
-        engine_path = os.path.join(opt.model_dir, "trt_" + hypes['dataset'] + '.engine')
-        try:
-            model = trt_utils.TRTEngineWrapper(engine_path)
-            print("Loaded the ONNX-based model:")
-            print(f"    {engine_path}")
-        except:
-            raise ModuleNotFoundError(f"Unable to load the ONNX-based model in {engine_path}")
-    elif opt.type == 'pytorch':
-        try:
-            model = train_utils.create_model(hypes)
-            if torch.cuda.is_available():
-                model.cuda()
-            print('Loading Model from checkpoint')
-            saved_path = opt.model_dir
-            _, model = train_utils.load_saved_model(saved_path, model)
-            model.eval()
-            print("Loaded the PyTorch model:")
-            print(f"    {saved_path}")
-        except:
-            raise ModuleNotFoundError(f"Unable to load the PyTorch model in {saved_path}")
-    else:
-        raise NotImplementedError(f"Cannot run inference with selected type: {opt.type}")
-    print(f"{'-' * 52}\n")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -95,7 +89,6 @@ def main():
                         unit='batch',
                         dynamic_ncols=True)
     for i, batch_data in enumerate(progress_bar):
-        # print(i)
         with torch.no_grad():
             batch_data = train_utils.to_device(batch_data, device)
             if opt.fusion_method == 'late':

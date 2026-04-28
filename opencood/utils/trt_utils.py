@@ -1,5 +1,6 @@
 import argparse
 import opencood.hypes_yaml.yaml_utils as yaml_utils
+from opencood.tools import train_utils
 import tensorrt as trt
 import torch
 
@@ -49,6 +50,7 @@ def load_params():
     hypes['name'] = opt.model
 
     hypes['dataset'] = hypes['validate_dir'].split('/')[-1]
+    hypes['model_dir'] = opt.model_dir
 
     # convenient for eval prints
     opt.dataset = hypes['dataset']
@@ -102,3 +104,30 @@ class TRTEngineWrapper:
             self.torch_stream.synchronize()
         
         return outputs['psm'], outputs['rm']
+
+
+def load_model(hypes=None, opt=None):
+    """
+    Load the model with parameters given in the command line.
+    
+    Return:
+        model - in eval mode and on cuda
+        hypes
+        opt
+    """
+    print(f"\n{'='*15} MODEL LOADING {'='*15}")
+
+    if hypes is None and opt is None:
+        hypes, opt = load_params()
+
+    model = train_utils.create_model(hypes)
+
+    print('Loading Model from checkpoint')
+    saved_path = opt.model_dir
+    _, model = train_utils.load_saved_model(saved_path, model)
+    
+    print("Loaded the PyTorch model:")
+    print(f"    {saved_path}")
+
+    return model.eval().cuda(), hypes, opt
+

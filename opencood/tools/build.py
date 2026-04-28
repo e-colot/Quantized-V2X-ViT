@@ -6,13 +6,13 @@ import onnx
 import onnxsim
 import tensorrt as trt
 
-from opencood.utils import build_utils, onnx_utils
+from opencood.utils import build_utils, onnx_utils, trt_utils
 
 
-def _build_torchscript(model, inputs, opt, ts_opt):
+def _build_torchscript(model, inputs, hypes, ts_opt):
     print("Tracing model to TorchScript")
     traced_model = torch.jit.trace(model, inputs)
-    traced_path = os.path.join(opt.model_dir, "logs/TS_graph.log")
+    traced_path = os.path.join(hypes['model_dir'], "logs/TS_graph.log")
     with open(traced_path, "w") as f:
         graph = traced_model.graph.copy()
         torch._C._jit_pass_inline(graph)
@@ -33,16 +33,16 @@ def _build_torchscript(model, inputs, opt, ts_opt):
     )
     print(f"\n{'='*15} ENGINE SUCCESSFULLY BUILT {'='*15}")
 
-    save_path = os.path.join(opt.model_dir, "trt_" + opt.dataset + '.pt')
+    save_path = os.path.join(hypes['model_dir'], "trt_" + hypes['dataset'] + '.pt')
     torch.jit.save(trt_model, save_path)
     print(f'Engine stored in {save_path}')
 
-def _build_onnx(model, inputs, opt, onnx_opt):
+def _build_onnx(model, inputs, hypes, onnx_opt):
     print('ONNX generation')
     
-    onnx_path = os.path.join(opt.model_dir, "onnx/" + opt.dataset + '.onnx')
-    engine_path = os.path.join(opt.model_dir, "trt_" + opt.dataset + '.engine')
-    log_path = os.path.join(opt.model_dir, "logs/" + opt.dataset + '_onnx.log')
+    onnx_path = os.path.join(hypes['model_dir'], "onnx/" + hypes['dataset'] + '.onnx')
+    engine_path = os.path.join(hypes['model_dir'], "trt_" + hypes['dataset'] + '.engine')
+    log_path = os.path.join(hypes['model_dir'], "logs/" + hypes['dataset'] + '_onnx.log')
 
     with torch.no_grad():
         torch.onnx.export(
@@ -61,14 +61,18 @@ def _build_onnx(model, inputs, opt, onnx_opt):
     onnx_model = onnx.load(onnx_path)
     onnx.checker.check_model(onnx_model)
 
-    print('ONNX simplification')
-    simplified, check_ok = onnxsim.simplify(onnx_model)
-    if check_ok:
-        onnx.save(simplified, onnx_path)
-        print("Simplification successful, saved simplified model")
-        onnx_utils.log_onnx_structure(simplified, log_path)
-    else:
-        print("[WARNING-ONNX] onnxsim check failed, using original ONNX")
+    # print('ONNX simplification')
+    # simplified, check_ok = onnxsim.simplify(onnx_model)
+    # if check_ok:
+    #     onnx.save(simplified, onnx_path)
+    #     print("Simplification successful, saved simplified model")
+    #     onnx_utils.log_onnx_structure(simplified, log_path)
+    # else:
+    #     print("[WARNING-ONNX] onnxsim check failed, using original ONNX")
+
+    onnx.save(onnx_model, onnx_path)
+    print("Saved ONNX model")
+    onnx_utils.log_onnx_structure(onnx_model, log_path)
     print(f"{'-'*63}")
     
     print("Compiling ONNX model to TensorRT engine")
@@ -116,15 +120,17 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
 
-    model, hypes, opt = build_utils.load_model()
+    model, hypes, opt = trt_utils.load_model()
+    print(f"{'-'*63}")
+
     inputs, ts_opt, onnx_opt = build_utils.build_inputs(hypes)
 
     print(f"\n{'='*15} BUILDING TRT ENGINE {'='*15}")
 
     if opt.type == 'torchscript':
-        _build_torchscript(model, inputs, opt, ts_opt)
+        _build_torchscript(model, inputs, hypes, ts_opt)
     elif opt.type == 'onnx':
-        _build_onnx(model, inputs, opt, onnx_opt)
+        _build_onnx(model, inputs, hypes, onnx_opt)
     else:
         raise NotImplementedError(f"Cannot build with selected type: {opt.type}")
     
